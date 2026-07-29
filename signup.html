@@ -9,13 +9,22 @@
 <h1>FS Cargo Updates</h1>
 <p>Signing up lets you receive information about FS Cargo and all its updates and changes, plus news about other upcoming projects from FSC Inc.</p>
 <p>We do not share, sell, or otherwise provide your email address to any third-party vendors. It's used only to send you these updates — nothing else.</p>
-<p>Enter your email below to get started. You can unsubscribe at any time using the link in every message.</p>
+<p>The email and password you choose below will also be your login for the FS Cargo beta once it's available — you'll just sign in with the app directly, no separate account creation needed. Access is granted after a short admin approval, and you'll be notified once you're in.</p>
+<p>You can unsubscribe from update emails at any time using the link in every message.</p>
 
 <form id="signupForm">
   <label for="email">Email address</label><br>
   <input type="email" id="email" name="email" required autocomplete="email" style="width: 260px;"><br><br>
+
+  <label for="password">Password (at least 8 characters)</label><br>
+  <input type="password" id="password" name="password" required minlength="8" autocomplete="new-password" style="width: 260px;"><br><br>
+
+  <label for="passwordConfirm">Confirm password</label><br>
+  <input type="password" id="passwordConfirm" name="passwordConfirm" required minlength="8" autocomplete="new-password" style="width: 260px;"><br><br>
+
   <input type="checkbox" id="agreeCheck" name="agree" required>
   <label for="agreeCheck">I have read and agree to the <a href="confidentiality.html" target="_blank" rel="noopener">Confidentiality Agreement</a></label><br><br>
+
   <button type="submit">Sign Up</button>
 </form>
 
@@ -31,22 +40,61 @@ const SUPABASE_ANON_KEY = "sb_publishable_rIUu5mYP3jWaoDQcxIdZWw_MZ4MVsfi";
 const form = document.getElementById("signupForm");
 const status = document.getElementById("statusMsg");
 const emailInput = document.getElementById("email");
+const passwordInput = document.getElementById("password");
+const passwordConfirmInput = document.getElementById("passwordConfirm");
 const agreeCheck = document.getElementById("agreeCheck");
 
 form.addEventListener("submit", async function (e) {
   e.preventDefault();
   const email = emailInput.value.trim();
+  const password = passwordInput.value;
+  const passwordConfirm = passwordConfirmInput.value;
+
   if (!email) return;
   if (!agreeCheck.checked) {
     status.textContent = "You must agree to the Confidentiality Agreement to sign up.";
     return;
   }
+  if (password.length < 8) {
+    status.textContent = "Password must be at least 8 characters.";
+    return;
+  }
+  if (password !== passwordConfirm) {
+    status.textContent = "Passwords do not match.";
+    return;
+  }
 
-  status.textContent = "Signing up...";
+  status.textContent = "Creating your account...";
   form.querySelector("button").disabled = true;
 
   try {
-    const resp = await fetch(SUPABASE_URL + "/rest/v1/review_signups", {
+    // 1. Create the real FS Cargo account (email + password) — this is the exact
+    // same Supabase Auth signup endpoint the app itself uses, so this email and
+    // password will work to log in once beta access is approved.
+    const authResp = await fetch(SUPABASE_URL + "/auth/v1/signup", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY
+      },
+      body: JSON.stringify({ email: email, password: password })
+    });
+    const authBody = await authResp.json();
+
+    if (!authResp.ok) {
+      const msg = (authBody && authBody.msg) || (authBody && authBody.error_description) || "";
+      if (/already registered|already exists/i.test(msg)) {
+        status.textContent = "An account already exists for that email — use the FS Cargo app to log in instead.";
+      } else {
+        status.textContent = msg || "Could not create your account. Please try again.";
+      }
+      form.querySelector("button").disabled = false;
+      return;
+    }
+
+    // 2. Also add them to the update-list broadcast table (separate from the auth
+    // account) so "Send to All Signups" in the admin panel reaches them too.
+    await fetch(SUPABASE_URL + "/rest/v1/review_signups", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -60,15 +108,11 @@ form.addEventListener("submit", async function (e) {
         agreed_at: new Date().toISOString()
       })
     });
+    // Not fatal if this second step fails (e.g. already on the list) — the account
+    // itself is what matters most, so don't block success on it.
 
-    if (resp.ok) {
-      status.textContent = "You're signed up! Thanks for joining.";
-      form.reset();
-    } else if (resp.status === 409) {
-      status.textContent = "That email is already signed up.";
-    } else {
-      status.textContent = "Something went wrong. Please try again in a moment.";
-    }
+    status.textContent = "You're signed up! Once your beta access is approved, log into the FS Cargo app using this same email and password.";
+    form.reset();
   } catch (err) {
     status.textContent = "Could not reach the server. Check your connection and try again.";
   } finally {
