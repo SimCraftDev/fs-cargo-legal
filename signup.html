@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FS Cargo Updates — Sign Up</title>
+</head>
+<body>
+<h1>FS Cargo Updates</h1>
+<p>Signing up lets you receive information about FS Cargo and all its updates and changes, plus news about other upcoming projects from FSC Inc.</p>
+<p>We do not share, sell, or otherwise provide your email address to any third-party vendors. It's used only to send you these updates — nothing else.</p>
+<p>Enter your email below to get started. You can unsubscribe at any time using the link in every message.</p>
+
+<form id="signupForm">
+  <label for="email">Email address</label><br>
+  <input type="email" id="email" name="email" required autocomplete="email" style="width: 260px;">
+  <button type="submit">Sign Up</button>
+</form>
+
+<p id="statusMsg" role="status" aria-live="polite"></p>
+
+<h2>Contact Us</h2>
+<p>Questions or feedback? <a href="mailto:737flights@gmail.com">Send us an email</a>.</p>
+
+<script>
+const SUPABASE_URL = "https://nevontgkxsutisknkyui.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_rIUu5mYP3jWaoDQcxIdZWw_MZ4MVsfi";
+
+const form = document.getElementById("signupForm");
+const status = document.getElementById("statusMsg");
+const emailInput = document.getElementById("email");
+
+form.addEventListener("submit", async function (e) {
+  e.preventDefault();
+  const email = emailInput.value.trim();
+  if (!email) return;
+
+  status.textContent = "Signing up...";
+  form.querySelector("button").disabled = true;
+
+  try {
+    const resp = await fetch(SUPABASE_URL + "/rest/v1/review_signups", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+        "Prefer": "return=minimal"
+      },
+      body: JSON.stringify({ email: email })
+    });
+
+    if (resp.ok) {
+      status.textContent = "You're signed up! Thanks for joining.";
+      form.reset();
+    } else if (resp.status === 409) {
+      status.textContent = "That email is already signed up.";
+    } else {
+      status.textContent = "Something went wrong. Please try again in a moment.";
+    }
+  } catch (err) {
+    status.textContent = "Could not reach the server. Check your connection and try again.";
+  } finally {
+    form.querySelector("button").disabled = false;
+  }
+});
+</script>
+</body>
+</html>
