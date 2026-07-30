@@ -32,6 +32,62 @@
     <input type="password" id="passwordConfirm" name="passwordConfirm" minlength="8" autocomplete="new-password" style="width: 260px;"><br><br>
   </div>
 
+  <div id="betaQuestions">
+    <h2>Beta Application Questions</h2>
+    <p>Since you've chosen both the beta and the update list, please answer the following so we can review your application.</p>
+
+    <label for="yearsSimming">How long have you been simming?</label><br>
+    <input type="text" id="yearsSimming" name="yearsSimming" style="width: 260px;"><br><br>
+
+    <label for="aircraftFlown">What airplanes do you fly?</label><br>
+    <input type="text" id="aircraftFlown" name="aircraftFlown" style="width: 260px;"><br><br>
+
+    <label for="simPlatform">What sim are you flying in?</label><br>
+    <input type="text" id="simPlatform" name="simPlatform" style="width: 260px;"><br><br>
+
+    <label for="interestReason">Tell us why you are interested in joining the beta group.</label><br>
+    <textarea id="interestReason" name="interestReason" rows="4" style="width: 400px;"></textarea><br><br>
+
+    <fieldset>
+      <legend>Have you been on any other beta groups before?</legend>
+      <input type="radio" id="priorBetaYes" name="priorBeta" value="yes">
+      <label for="priorBetaYes">Yes</label><br>
+      <input type="radio" id="priorBetaNo" name="priorBeta" value="no">
+      <label for="priorBetaNo">No</label>
+    </fieldset>
+    <br>
+
+    <fieldset>
+      <legend>Are you on any beta groups now?</legend>
+      <input type="radio" id="currentBetaYes" name="currentBeta" value="yes">
+      <label for="currentBetaYes">Yes</label><br>
+      <input type="radio" id="currentBetaNo" name="currentBeta" value="no">
+      <label for="currentBetaNo">No</label>
+    </fieldset>
+    <br>
+
+    <label for="preferredName">What name do you go by?</label><br>
+    <input type="text" id="preferredName" name="preferredName" style="width: 260px;"><br><br>
+
+    <label for="phone">Best phone number to reach you (if needed)</label><br>
+    <input type="tel" id="phone" name="phone" autocomplete="tel" style="width: 260px;"><br><br>
+
+    <fieldset>
+      <legend>Can you put in more than 4 hours a week?</legend>
+      <input type="radio" id="commit4hrsYes" name="commit4hrs" value="yes">
+      <label for="commit4hrsYes">Yes</label><br>
+      <input type="radio" id="commit4hrsNo" name="commit4hrs" value="no">
+      <label for="commit4hrsNo">No</label>
+    </fieldset>
+    <br>
+
+    <input type="checkbox" id="ndaAck" name="ndaAck">
+    <label for="ndaAck">I understand that I cannot at any time talk about anything in the beta program — including discussions, designs, or ideas — and that if caught, legal action can and will be taken.</label><br><br>
+
+    <label for="additionalInfo">Anything you want us to know about you or other information you want to share? (optional)</label><br>
+    <textarea id="additionalInfo" name="additionalInfo" rows="4" style="width: 400px;"></textarea><br><br>
+  </div>
+
   <input type="checkbox" id="agreeCheck" name="agree" required>
   <label for="agreeCheck">I have read and agree to the <a href="confidentiality.html" target="_blank" rel="noopener">Confidentiality Agreement</a></label><br><br>
 
@@ -57,6 +113,16 @@ const joinBeta = document.getElementById("joinBeta");
 const joinList = document.getElementById("joinList");
 const passwordSection = document.getElementById("passwordSection");
 
+const betaQuestions = document.getElementById("betaQuestions");
+const yearsSimmingInput = document.getElementById("yearsSimming");
+const aircraftFlownInput = document.getElementById("aircraftFlown");
+const simPlatformInput = document.getElementById("simPlatform");
+const interestReasonInput = document.getElementById("interestReason");
+const preferredNameInput = document.getElementById("preferredName");
+const phoneInput = document.getElementById("phone");
+const ndaAckInput = document.getElementById("ndaAck");
+const additionalInfoInput = document.getElementById("additionalInfo");
+
 function syncPasswordSection() {
   const needsPassword = joinBeta.checked;
   passwordSection.hidden = !needsPassword;
@@ -67,14 +133,41 @@ function syncPasswordSection() {
     passwordConfirmInput.value = "";
   }
 }
-joinBeta.addEventListener("change", syncPasswordSection);
+
+function syncBetaQuestions() {
+  const showBetaQuestions = joinBeta.checked && joinList.checked;
+  betaQuestions.hidden = !showBetaQuestions;
+
+  const requiredTextFields = [
+    yearsSimmingInput, aircraftFlownInput, simPlatformInput,
+    interestReasonInput, preferredNameInput, phoneInput
+  ];
+  requiredTextFields.forEach(el => { el.required = showBetaQuestions; });
+
+  const requiredRadioNames = ["priorBeta", "currentBeta", "commit4hrs"];
+  requiredRadioNames.forEach(name => {
+    document.querySelectorAll('input[name="' + name + '"]').forEach(el => {
+      el.required = showBetaQuestions;
+    });
+  });
+
+  ndaAckInput.required = showBetaQuestions;
+}
+
+joinBeta.addEventListener("change", function () {
+  syncPasswordSection();
+  syncBetaQuestions();
+});
+joinList.addEventListener("change", syncBetaQuestions);
 syncPasswordSection();
+syncBetaQuestions();
 
 form.addEventListener("submit", async function (e) {
   e.preventDefault();
   const email = emailInput.value.trim();
   const password = passwordInput.value;
   const passwordConfirm = passwordConfirmInput.value;
+  const bothChecked = joinBeta.checked && joinList.checked;
 
   if (!email) return;
   if (!joinBeta.checked && !joinList.checked) {
@@ -92,6 +185,24 @@ form.addEventListener("submit", async function (e) {
     }
     if (password !== passwordConfirm) {
       status.textContent = "Passwords do not match.";
+      return;
+    }
+  }
+
+  let priorBeta, currentBeta, commit4hrs;
+  if (bothChecked) {
+    priorBeta = document.querySelector('input[name="priorBeta"]:checked');
+    currentBeta = document.querySelector('input[name="currentBeta"]:checked');
+    commit4hrs = document.querySelector('input[name="commit4hrs"]:checked');
+    if (!yearsSimmingInput.value.trim() || !aircraftFlownInput.value.trim() ||
+        !simPlatformInput.value.trim() || !interestReasonInput.value.trim() ||
+        !preferredNameInput.value.trim() || !phoneInput.value.trim() ||
+        !priorBeta || !currentBeta || !commit4hrs) {
+      status.textContent = "Please answer all the beta application questions.";
+      return;
+    }
+    if (!ndaAckInput.checked) {
+      status.textContent = "You must acknowledge the beta confidentiality question to apply.";
       return;
     }
   }
@@ -151,20 +262,58 @@ form.addEventListener("submit", async function (e) {
       listJoined = listResp.ok || listResp.status === 409;
     }
 
+    if (bothChecked) {
+      try {
+        await fetch(SUPABASE_URL + "/rest/v1/beta_applications", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": SUPABASE_ANON_KEY,
+            "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+            "Prefer": "return=minimal"
+          },
+          body: JSON.stringify({
+            email: email,
+            years_simming: yearsSimmingInput.value.trim(),
+            aircraft_flown: aircraftFlownInput.value.trim(),
+            sim_platform: simPlatformInput.value.trim(),
+            interest_reason: interestReasonInput.value.trim(),
+            prior_beta_groups: priorBeta.value === "yes",
+            current_beta_groups: currentBeta.value === "yes",
+            preferred_name: preferredNameInput.value.trim(),
+            phone: phoneInput.value.trim(),
+            can_commit_4_hours: commit4hrs.value === "yes",
+            nda_ack: ndaAckInput.checked,
+            additional_info: additionalInfoInput.value.trim()
+          })
+        });
+        // A duplicate-email conflict just means they already have an
+        // application on file — nothing more to do either way, so the
+        // result of this call is never surfaced to the signer-upper.
+      } catch (err) {
+        // Best-effort — the beta account/list join above already succeeded
+        // (or failed) on their own; don't block the success message on this.
+      }
+    }
+
+    const pendingNote = " If you don't hear back within 24 hours, please reach out to us at 737flights@gmail.com.";
+
     if (betaResult === "created" && joinList.checked) {
-      status.textContent = "You're signed up for the beta and the update list! Once your beta access is approved, log into the FS Cargo app using this same email and password.";
+      status.textContent = "Thanks for applying! Your beta application and update list signup are both pending approval." + pendingNote;
     } else if (betaResult === "created") {
-      status.textContent = "Your beta account is ready! Once your access is approved, log into the FS Cargo app using this same email and password.";
+      status.textContent = "Your beta signup is pending approval." + pendingNote;
     } else if (betaResult === "exists") {
-      status.textContent = "An account already exists for that email — use the FS Cargo app to log in instead." + (joinList.checked ? " You've also been added to the update list." : "");
+      status.textContent = "An account already exists for that email — use the FS Cargo app to log in instead." +
+        (joinList.checked ? " Your update list signup is pending approval." + pendingNote : "");
     } else if (joinList.checked && listJoined) {
-      status.textContent = "You're on the FS Cargo update list!";
+      status.textContent = "You're on the FS Cargo update list! Your signup is pending approval." + pendingNote;
     } else if (joinList.checked) {
       status.textContent = "Could not add you to the update list. Please try again.";
     }
 
     form.reset();
     syncPasswordSection();
+    syncBetaQuestions();
   } catch (err) {
     status.textContent = "Could not reach the server. Check your connection and try again.";
   } finally {
