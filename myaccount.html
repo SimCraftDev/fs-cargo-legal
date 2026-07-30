@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FS Cargo — My Account</title>
+</head>
+<body>
+<h1>My Account</h1>
+<p>If you signed up for both the FS Cargo Beta and the FSC Update List, log in below with the
+email and password you chose to update the information you gave us — this works even before your
+beta access is approved.</p>
+
+<form id="loginForm">
+  <label for="loginEmail">Email address</label><br>
+  <input type="email" id="loginEmail" name="loginEmail" required autocomplete="email" style="width: 260px;"><br><br>
+
+  <label for="loginPassword">Password</label><br>
+  <input type="password" id="loginPassword" name="loginPassword" required autocomplete="current-password" style="width: 260px;"><br><br>
+
+  <button type="submit">Log In</button>
+</form>
+
+<p id="loginStatus" role="status" aria-live="polite"></p>
+
+<div id="accountSection" hidden>
+  <h2>Update Your Information</h2>
+  <p id="emailDisplay"></p>
+
+  <form id="updateForm">
+    <label for="preferredName">What name do you go by?</label><br>
+    <input type="text" id="preferredName" name="preferredName" style="width: 260px;"><br><br>
+
+    <label for="phone">Best phone number to reach you (if needed)</label><br>
+    <input type="tel" id="phone" name="phone" autocomplete="tel" style="width: 260px;"><br><br>
+
+    <label for="yearsSimming">How long have you been simming?</label><br>
+    <input type="text" id="yearsSimming" name="yearsSimming" style="width: 260px;"><br><br>
+
+    <label for="aircraftFlown">What airplanes do you fly?</label><br>
+    <input type="text" id="aircraftFlown" name="aircraftFlown" style="width: 260px;"><br><br>
+
+    <label for="simPlatform">What sim are you flying in?</label><br>
+    <input type="text" id="simPlatform" name="simPlatform" style="width: 260px;"><br><br>
+
+    <label for="interestReason">Why are you interested in the beta group?</label><br>
+    <textarea id="interestReason" name="interestReason" rows="4" style="width: 400px;"></textarea><br><br>
+
+    <fieldset>
+      <legend>Have you been on any other beta groups before?</legend>
+      <input type="radio" id="priorBetaYes" name="priorBeta" value="yes">
+      <label for="priorBetaYes">Yes</label><br>
+      <input type="radio" id="priorBetaNo" name="priorBeta" value="no">
+      <label for="priorBetaNo">No</label>
+    </fieldset>
+    <br>
+
+    <fieldset>
+      <legend>Are you on any beta groups now?</legend>
+      <input type="radio" id="currentBetaYes" name="currentBeta" value="yes">
+      <label for="currentBetaYes">Yes</label><br>
+      <input type="radio" id="currentBetaNo" name="currentBeta" value="no">
+      <label for="currentBetaNo">No</label>
+    </fieldset>
+    <br>
+
+    <fieldset>
+      <legend>Can you put in more than 4 hours a week?</legend>
+      <input type="radio" id="commit4hrsYes" name="commit4hrs" value="yes">
+      <label for="commit4hrsYes">Yes</label><br>
+      <input type="radio" id="commit4hrsNo" name="commit4hrs" value="no">
+      <label for="commit4hrsNo">No</label>
+    </fieldset>
+    <br>
+
+    <label for="additionalInfo">Anything you want us to know about you or other information you want to share? (optional)</label><br>
+    <textarea id="additionalInfo" name="additionalInfo" rows="4" style="width: 400px;"></textarea><br><br>
+
+    <button type="submit">Save Changes</button>
+  </form>
+
+  <p id="updateStatus" role="status" aria-live="polite"></p>
+</div>
+
+<p><a href="signup.html">Back to the signup page</a> · <a href="leave.html">Leave the beta or update list</a></p>
+
+<h2>Contact Us</h2>
+<p>Questions or feedback? <a href="mailto:737flights@gmail.com">Send us an email</a>.</p>
+
+<script>
+const SUPABASE_URL = "https://nevontgkxsutisknkyui.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_rIUu5mYP3jWaoDQcxIdZWw_MZ4MVsfi";
+
+let accessToken = null;
+let loggedInEmail = null;
+
+const loginForm = document.getElementById("loginForm");
+const loginStatus = document.getElementById("loginStatus");
+const loginEmailInput = document.getElementById("loginEmail");
+const loginPasswordInput = document.getElementById("loginPassword");
+
+const accountSection = document.getElementById("accountSection");
+const emailDisplay = document.getElementById("emailDisplay");
+const updateForm = document.getElementById("updateForm");
+const updateStatus = document.getElementById("updateStatus");
+
+const preferredNameInput = document.getElementById("preferredName");
+const phoneInput = document.getElementById("phone");
+const yearsSimmingInput = document.getElementById("yearsSimming");
+const aircraftFlownInput = document.getElementById("aircraftFlown");
+const simPlatformInput = document.getElementById("simPlatform");
+const interestReasonInput = document.getElementById("interestReason");
+const additionalInfoInput = document.getElementById("additionalInfo");
+
+function setRadio(name, value) {
+  const el = document.querySelector('input[name="' + name + '"][value="' + (value ? "yes" : "no") + '"]');
+  if (el) el.checked = true;
+}
+
+function getRadio(name) {
+  const el = document.querySelector('input[name="' + name + '"]:checked');
+  return el ? el.value === "yes" : false;
+}
+
+loginForm.addEventListener("submit", async function (e) {
+  e.preventDefault();
+  const email = loginEmailInput.value.trim();
+  const password = loginPasswordInput.value;
+  if (!email || !password) return;
+
+  loginStatus.textContent = "Logging in...";
+  loginForm.querySelector("button").disabled = true;
+
+  try {
+    const resp = await fetch(SUPABASE_URL + "/auth/v1/token?grant_type=password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY },
+      body: JSON.stringify({ email: email, password: password })
+    });
+    const body = await resp.json();
+
+    if (!resp.ok) {
+      loginStatus.textContent = "Could not log in — check your email and password and try again.";
+      return;
+    }
+
+    accessToken = body.access_token;
+    loggedInEmail = email;
+
+    const appResp = await fetch(SUPABASE_URL + "/rest/v1/beta_applications?email=eq." + encodeURIComponent(email) + "&select=*&limit=1",
+      { headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + accessToken } });
+
+    if (!appResp.ok) {
+      loginStatus.textContent = "Logged in, but could not load your information. Please try again later.";
+      return;
+    }
+
+    const rows = await appResp.json();
+    if (!rows || rows.length === 0) {
+      loginStatus.textContent = "Logged in, but there's no beta application on file for this account — this page is only for people who joined both the beta and the update list.";
+      return;
+    }
+
+    const app = rows[0];
+    emailDisplay.textContent = "Logged in as " + email;
+    preferredNameInput.value = app.preferred_name || "";
+    phoneInput.value = app.phone || "";
+    yearsSimmingInput.value = app.years_simming || "";
+    aircraftFlownInput.value = app.aircraft_flown || "";
+    simPlatformInput.value = app.sim_platform || "";
+    interestReasonInput.value = app.interest_reason || "";
+    additionalInfoInput.value = app.additional_info || "";
+    setRadio("priorBeta", app.prior_beta_groups);
+    setRadio("currentBeta", app.current_beta_groups);
+    setRadio("commit4hrs", app.can_commit_4_hours);
+
+    loginStatus.textContent = "Logged in.";
+    accountSection.hidden = false;
+    loginForm.hidden = true;
+  } catch (err) {
+    loginStatus.textContent = "Could not reach the server. Check your connection and try again.";
+  } finally {
+    loginForm.querySelector("button").disabled = false;
+  }
+});
+
+updateForm.addEventListener("submit", async function (e) {
+  e.preventDefault();
+  if (!accessToken || !loggedInEmail) return;
+
+  updateStatus.textContent = "Saving...";
+  updateForm.querySelector("button").disabled = true;
+
+  try {
+    const resp = await fetch(SUPABASE_URL + "/rest/v1/beta_applications?email=eq." + encodeURIComponent(loggedInEmail), {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": "Bearer " + accessToken,
+        "Prefer": "return=minimal"
+      },
+      body: JSON.stringify({
+        preferred_name: preferredNameInput.value.trim(),
+        phone: phoneInput.value.trim(),
+        years_simming: yearsSimmingInput.value.trim(),
+        aircraft_flown: aircraftFlownInput.value.trim(),
+        sim_platform: simPlatformInput.value.trim(),
+        interest_reason: interestReasonInput.value.trim(),
+        additional_info: additionalInfoInput.value.trim(),
+        prior_beta_groups: getRadio("priorBeta"),
+        current_beta_groups: getRadio("currentBeta"),
+        can_commit_4_hours: getRadio("commit4hrs")
+      })
+    });
+
+    updateStatus.textContent = resp.ok
+      ? "Your information has been updated."
+      : "Could not save your changes. Please try again.";
+  } catch (err) {
+    updateStatus.textContent = "Could not reach the server. Check your connection and try again.";
+  } finally {
+    updateForm.querySelector("button").disabled = false;
+  }
+});
+</script>
+</body>
+</html>
