@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FS Cargo — Admin</title>
+</head>
+<body>
+<h1>FS Cargo Admin — Manage Users</h1>
+<p>Log in with your admin FS Cargo account to approve/revoke beta and update-list access, leave
+notes, issue warnings, or permanently delete an account — the same actions available in the app's
+Admin Management window. Every action here is enforced server-side by the same admin check the
+app uses, so nothing here works for a non-admin account regardless of what this page shows.</p>
+
+<form id="loginForm">
+  <label for="loginEmail">Email address</label><br>
+  <input type="email" id="loginEmail" name="loginEmail" required autocomplete="email" style="width: 260px;"><br><br>
+
+  <label for="loginPassword">Password</label><br>
+  <input type="password" id="loginPassword" name="loginPassword" required autocomplete="current-password" style="width: 260px;"><br><br>
+
+  <button type="submit">Log In</button>
+</form>
+
+<p id="loginStatus" role="status" aria-live="polite"></p>
+
+<div id="adminSection" hidden>
+  <h2>All Users</h2>
+  <button type="button" id="refreshBtn">Refresh List</button>
+  <p id="listStatus" role="status" aria-live="polite"></p>
+
+  <label for="userSelect">Select a user</label><br>
+  <select id="userSelect" size="12" style="width: 100%; max-width: 700px;"></select>
+
+  <div id="detailSection" hidden>
+    <h3>Selected User</h3>
+    <p id="detailText" style="white-space: pre-line;"></p>
+
+    <h4>Update List</h4>
+    <button type="button" id="approveListBtn">Approve for List</button>
+    <button type="button" id="revokeListBtn">Revoke List</button>
+
+    <h4>Beta Access</h4>
+    <button type="button" id="approveBetaBtn">Approve Beta</button>
+    <button type="button" id="revokeBetaBtn">Revoke Beta</button>
+
+    <h4>Admin Note</h4>
+    <label for="noteBox">Note about this user</label><br>
+    <textarea id="noteBox" rows="4" style="width: 400px;"></textarea><br>
+    <button type="button" id="saveNoteBtn">Save Note</button>
+
+    <h4>Warnings</h4>
+    <ul id="warningsList"></ul>
+    <label for="warningReasonBox">Reason for a new warning</label><br>
+    <input type="text" id="warningReasonBox" style="width: 400px;"><br>
+    <button type="button" id="addWarningBtn">Add Warning</button>
+
+    <h4 style="color:#c00;">Danger Zone</h4>
+    <button type="button" id="deleteBtn" style="color:#c00;">Delete Account Permanently</button>
+
+    <p id="actionStatus" role="status" aria-live="polite"></p>
+  </div>
+</div>
+
+<h2>Contact Us</h2>
+<p>Questions or feedback? <a href="mailto:737flights@gmail.com">Send us an email</a>.</p>
+
+<script>
+const SUPABASE_URL = "https://nevontgkxsutisknkyui.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_rIUu5mYP3jWaoDQcxIdZWw_MZ4MVsfi";
+
+let accessToken = null;
+let users = []; // merged, enriched user objects
+let selected = null;
+
+const loginForm = document.getElementById("loginForm");
+const loginStatus = document.getElementById("loginStatus");
+const loginEmailInput = document.getElementById("loginEmail");
+const loginPasswordInput = document.getElementById("loginPassword");
+
+const adminSection = document.getElementById("adminSection");
+const listStatus = document.getElementById("listStatus");
+const refreshBtn = document.getElementById("refreshBtn");
+const userSelect = document.getElementById("userSelect");
+
+const detailSection = document.getElementById("detailSection");
+const detailText = document.getElementById("detailText");
+const noteBox = document.getElementById("noteBox");
+const warningsList = document.getElementById("warningsList");
+const warningReasonBox = document.getElementById("warningReasonBox");
+const actionStatus = document.getElementById("actionStatus");
+
+function authHeaders(extra) {
+  return Object.assign({
+    "apikey": SUPABASE_ANON_KEY,
+    "Authorization": "Bearer " + accessToken
+  }, extra || {});
+}
+
+function setActionStatus(text) {
+  actionStatus.textContent = text;
+}
+
+loginForm.addEventListener("submit", async function (e) {
+  e.preventDefault();
+  const email = loginEmailInput.value.trim();
+  const password = loginPasswordInput.value;
+  if (!email || !password) return;
+
+  loginStatus.textContent = "Logging in...";
+  loginForm.querySelector("button").disabled = true;
+
+  try {
+    const resp = await fetch(SUPABASE_URL + "/auth/v1/token?grant_type=password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY },
+      body: JSON.stringify({ email: email, password: password })
+    });
+    const body = await resp.json();
+
+    if (!resp.ok) {
+      loginStatus.textContent = "Could not log in — check your email and password and try again.";
+      return;
+    }
+
+    accessToken = body.access_token;
+
+    const profResp = await fetch(SUPABASE_URL + "/rest/v1/profiles?select=is_admin&email=eq." + encodeURIComponent(email),
+      { headers: authHeaders() });
+    const profRows = profResp.ok ? await profResp.json() : [];
+
+    if (!profRows.length || !profRows[0].is_admin) {
+      loginStatus.textContent = "This account is not an admin — nothing here will work for it.";
+      accessToken = null;
+      return;
+    }
+
+    loginStatus.textContent = "Logged in as admin.";
+    loginForm.hidden = true;
+    adminSection.hidden = false;
+    await refreshUsers();
+  } catch (err) {
+    loginStatus.textContent = "Could not reach the server. Check your connection and try again.";
+  } finally {
+    loginForm.querySelector("button").disabled = false;
+  }
+});
+
+async function fetchAll(path) {
+  const resp = await fetch(SUPABASE_URL + path, { headers: authHeaders() });
+  if (!resp.ok) return [];
+  return await resp.json();
+}
+
+async function refreshUsers() {
+  listStatus.textContent = "Loading users...";
+  detailSection.hidden = true;
+  selected = null;
+
+  const [profiles, signups, notes, warnings, applications] = await Promise.all([
+    fetchAll("/rest/v1/profiles?select=id,email,display_name,beta_status,is_admin,blocked,created_at"),
+    fetchAll("/rest/v1/review_signups?select=email,list_status,unsubscribed,created_at"),
+    fetchAll("/rest/v1/user_notes?select=email,note"),
+    fetchAll("/rest/v1/user_warnings?select=email,reason,created_at"),
+    fetchAll("/rest/v1/beta_applications?select=*")
+  ]);
+
+  const noteByEmail = {};
+  notes.forEach(n => { noteByEmail[n.email.toLowerCase()] = n.note; });
+
+  const warningsByEmail = {};
+  warnings.forEach(w => {
+    const key = w.email.toLowerCase();
+    (warningsByEmail[key] = warningsByEmail[key] || []).push(w);
+  });
+
+  const appByEmail = {};
+  applications.forEach(a => { appByEmail[a.email.toLowerCase()] = a; });
+
+  const byEmail = {};
+
+  profiles.forEach(p => {
+    const key = p.email.toLowerCase();
+    byEmail[key] = {
+      email: p.email, profileId: p.id, betaStatus: p.beta_status, isAdmin: p.is_admin,
+      blocked: p.blocked, listStatus: null, listUnsubscribed: false,
+      createdAt: p.created_at, note: noteByEmail[key] || "",
+      warnings: warningsByEmail[key] || [], application: appByEmail[key] || null
+    };
+  });
+
+  signups.forEach(s => {
+    const key = s.email.toLowerCase();
+    if (byEmail[key]) {
+      byEmail[key].listStatus = s.list_status;
+      byEmail[key].listUnsubscribed = s.unsubscribed;
+      if (new Date(s.created_at) < new Date(byEmail[key].createdAt)) byEmail[key].createdAt = s.created_at;
+    } else {
+      byEmail[key] = {
+        email: s.email, profileId: null, betaStatus: null, isAdmin: false, blocked: false,
+        listStatus: s.list_status, listUnsubscribed: s.unsubscribed,
+        createdAt: s.created_at, note: noteByEmail[key] || "",
+        warnings: warningsByEmail[key] || [], application: appByEmail[key] || null
+      };
+    }
+  });
+
+  users = Object.values(byEmail).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  userSelect.innerHTML = "";
+  users.forEach((u, idx) => {
+    const membership = [];
+    if (u.profileId) membership.push("Beta");
+    if (u.listStatus) membership.push("Update List");
+
+    const name = (u.application && u.application.preferred_name) || "not provided";
+    const phone = (u.application && u.application.phone) || "not provided";
+
+    const opt = document.createElement("option");
+    opt.value = idx;
+    opt.textContent = u.email + " — Name: " + name + " — Phone: " + phone +
+      " — Member of: " + (membership.length ? membership.join(" and ") : "neither") +
+      (u.warnings.length ? " — " + u.warnings.length + " warning(s)" : "");
+    userSelect.appendChild(opt);
+  });
+
+  listStatus.textContent = users.length + " user(s) loaded.";
+}
+
+refreshBtn.addEventListener("click", refreshUsers);
+
+userSelect.addEventListener("change", function () {
+  const idx = userSelect.value;
+  if (idx === "") return;
+  selected = users[idx];
+  showDetail();
+});
+
+function showDetail() {
+  if (!selected) { detailSection.hidden = true; return; }
+  detailSection.hidden = false;
+  setActionStatus("");
+
+  const lines = [];
+  lines.push("Email: " + selected.email);
+  lines.push("Name: " + ((selected.application && selected.application.preferred_name) || "not provided"));
+  lines.push("Phone: " + ((selected.application && selected.application.phone) || "not provided"));
+  lines.push(selected.profileId
+    ? "Beta access: " + selected.betaStatus + (selected.isAdmin ? " — admin" : "") + (selected.blocked ? " — BLOCKED" : "")
+    : "Beta access: never signed up for the app.");
+  lines.push(selected.listStatus
+    ? "Update list: " + selected.listStatus + (selected.listUnsubscribed ? " — unsubscribed" : "")
+    : "Update list: never joined.");
+  lines.push("Joined: " + new Date(selected.createdAt).toLocaleDateString());
+
+  if (selected.application) {
+    const a = selected.application;
+    lines.push("");
+    lines.push("--- Beta Application ---");
+    lines.push("How long simming: " + a.years_simming);
+    lines.push("Aircraft flown: " + a.aircraft_flown);
+    lines.push("Sim platform: " + a.sim_platform);
+    lines.push("Why interested: " + a.interest_reason);
+    lines.push("On a beta group before: " + (a.prior_beta_groups ? "Yes" : "No"));
+    lines.push("On a beta group now: " + (a.current_beta_groups ? "Yes" : "No"));
+    lines.push("Can commit 4+ hrs/week: " + (a.can_commit_4_hours ? "Yes" : "No"));
+    if (a.additional_info) lines.push("Additional info: " + a.additional_info);
+  }
+
+  detailText.textContent = lines.join("\n");
+  noteBox.value = selected.note;
+
+  warningsList.innerHTML = "";
+  selected.warnings
+    .slice()
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    .forEach(w => {
+      const li = document.createElement("li");
+      li.textContent = new Date(w.created_at).toLocaleDateString() + ": " + w.reason;
+      warningsList.appendChild(li);
+    });
+}
+
+async function patchProfile(profileId, body) {
+  const resp = await fetch(SUPABASE_URL + "/rest/v1/profiles?id=eq." + encodeURIComponent(profileId), {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body)
+  });
+  return resp.ok;
+}
+
+async function patchListStatus(email, status) {
+  const resp = await fetch(SUPABASE_URL + "/rest/v1/review_signups?email=eq." + encodeURIComponent(email), {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ list_status: status })
+  });
+  return resp.ok;
+}
+
+document.getElementById("approveListBtn").addEventListener("click", async () => {
+  if (!selected) return;
+  if (!selected.listStatus) { setActionStatus(selected.email + " never joined the update list."); return; }
+  setActionStatus("Approving for the update list...");
+  const ok = await patchListStatus(selected.email, "approved");
+  setActionStatus(ok ? "Approved for the update list." : "Could not update. Try again.");
+  if (ok) await refreshUsers();
+});
+
+document.getElementById("revokeListBtn").addEventListener("click", async () => {
+  if (!selected) return;
+  if (!selected.listStatus) { setActionStatus(selected.email + " never joined the update list."); return; }
+  setActionStatus("Revoking update-list access...");
+  const ok = await patchListStatus(selected.email, "revoked");
+  setActionStatus(ok ? "Update-list access revoked." : "Could not update. Try again.");
+  if (ok) await refreshUsers();
+});
+
+document.getElementById("approveBetaBtn").addEventListener("click", async () => {
+  if (!selected || !selected.profileId) { setActionStatus("This person has no FS Cargo account to approve."); return; }
+  setActionStatus("Approving beta access...");
+  const ok = await patchProfile(selected.profileId, { beta_status: "approved" });
+  setActionStatus(ok ? "Beta access approved." : "Could not update. Try again.");
+  if (ok) await refreshUsers();
+});
+
+document.getElementById("revokeBetaBtn").addEventListener("click", async () => {
+  if (!selected || !selected.profileId) { setActionStatus("This person has no FS Cargo account to revoke."); return; }
+  setActionStatus("Revoking beta access...");
+  const ok = await patchProfile(selected.profileId, { beta_status: "revoked" });
+  setActionStatus(ok ? "Beta access revoked." : "Could not update. Try again.");
+  if (ok) await refreshUsers();
+});
+
+document.getElementById("saveNoteBtn").addEventListener("click", async () => {
+  if (!selected) return;
+  setActionStatus("Saving note...");
+  const resp = await fetch(SUPABASE_URL + "/rest/v1/user_notes", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal" }),
+    body: JSON.stringify({ email: selected.email, note: noteBox.value.trim(), updated_at: new Date().toISOString() })
+  });
+  setActionStatus(resp.ok ? "Note saved." : "Could not save note. Try again.");
+  if (resp.ok) await refreshUsers();
+});
+
+document.getElementById("addWarningBtn").addEventListener("click", async () => {
+  if (!selected) return;
+  const reason = warningReasonBox.value.trim();
+  if (!reason) { setActionStatus("Enter a reason for the warning first."); return; }
+  setActionStatus("Adding warning...");
+  const resp = await fetch(SUPABASE_URL + "/rest/v1/user_warnings", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ email: selected.email, reason: reason })
+  });
+  setActionStatus(resp.ok ? "Warning added." : "Could not add warning. Try again.");
+  if (resp.ok) {
+    warningReasonBox.value = "";
+    await refreshUsers();
+  }
+});
+
+document.getElementById("deleteBtn").addEventListener("click", async () => {
+  if (!selected || !selected.profileId) { setActionStatus(selected ? selected.email + " has no FS Cargo account to delete." : ""); return; }
+
+  const confirmed = confirm("Permanently delete the account for " + selected.email +
+    "? This cannot be undone — they would need to sign up again from scratch to ever use the app.");
+  if (!confirmed) { setActionStatus("Deletion cancelled."); return; }
+
+  setActionStatus("Deleting account...");
+  const resp = await fetch(SUPABASE_URL + "/functions/v1/delete-user", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ userId: selected.profileId })
+  });
+  const body = await resp.json().catch(() => ({}));
+  setActionStatus(resp.ok ? "Account permanently deleted." : (body.error || "Could not delete account."));
+  if (resp.ok) await refreshUsers();
+});
+</script>
+</body>
+</html>
