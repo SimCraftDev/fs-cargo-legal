@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FS Cargo Updates — Leave</title>
+</head>
+<body>
+<h1>Leave FS Cargo Beta / Update List</h1>
+<p>Enter the email address you signed up with, then choose what you'd like to leave.</p>
+
+<form id="leaveForm">
+  <label for="email">Email address</label><br>
+  <input type="email" id="email" name="email" required autocomplete="email" style="width: 260px;"><br><br>
+
+  <fieldset>
+    <legend>What would you like to leave?</legend>
+    <input type="checkbox" id="leaveBeta" name="leaveBeta">
+    <label for="leaveBeta">Leave the FS Cargo Beta — you'll no longer have approved app access</label><br><br>
+
+    <input type="checkbox" id="leaveList" name="leaveList">
+    <label for="leaveList">Leave the FSC Update List — stop receiving update emails</label>
+  </fieldset>
+  <br>
+
+  <button type="submit">Leave Selected</button>
+</form>
+
+<p id="statusMsg" role="status" aria-live="polite"></p>
+
+<p><a href="signup.html">Back to the signup page</a></p>
+
+<h2>Contact Us</h2>
+<p>Questions or feedback? <a href="mailto:737flights@gmail.com">Send us an email</a>.</p>
+
+<script>
+const SUPABASE_URL = "https://nevontgkxsutisknkyui.supabase.co";
+
+const form = document.getElementById("leaveForm");
+const status = document.getElementById("statusMsg");
+const emailInput = document.getElementById("email");
+const leaveBeta = document.getElementById("leaveBeta");
+const leaveList = document.getElementById("leaveList");
+
+form.addEventListener("submit", async function (e) {
+  e.preventDefault();
+  const email = emailInput.value.trim();
+
+  if (!email) return;
+  if (!leaveBeta.checked && !leaveList.checked) {
+    status.textContent = "Please choose at least one: leave the beta, the update list, or both.";
+    return;
+  }
+
+  status.textContent = "Processing your request...";
+  form.querySelector("button").disabled = true;
+
+  try {
+    const resp = await fetch(SUPABASE_URL + "/functions/v1/leave-signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: email,
+        leaveBeta: leaveBeta.checked,
+        leaveList: leaveList.checked
+      })
+    });
+    const body = await resp.json();
+
+    if (!resp.ok) {
+      status.textContent = (body && body.error) || "Something went wrong. Please try again later.";
+      form.querySelector("button").disabled = false;
+      return;
+    }
+
+    const parts = [];
+    if (leaveList.checked) {
+      parts.push(body.leftList ? "You've left the FSC update list." : "Could not remove you from the update list.");
+    }
+    if (leaveBeta.checked) {
+      if (body.leftBeta) {
+        parts.push("You've left the FS Cargo beta.");
+      } else if (body.betaNotFound) {
+        parts.push("No beta account was found for that email.");
+      } else {
+        parts.push("Could not remove your beta access.");
+      }
+    }
+    status.textContent = parts.join(" ");
+    form.reset();
+  } catch (err) {
+    status.textContent = "Could not reach the server. Check your connection and try again.";
+  } finally {
+    form.querySelector("button").disabled = false;
+  }
+});
+</script>
+</body>
+</html>
