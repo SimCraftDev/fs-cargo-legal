@@ -7,9 +7,10 @@
 </head>
 <body>
 <h1>My Account</h1>
-<p>If you signed up for both the FS Cargo Beta and the FSC Update List, log in below with the
-email and password you chose to update the information you gave us — this works even before your
-beta access is approved.</p>
+<p>If you signed up for the FS Cargo Beta, log in below with the email and password you chose —
+this works even before your beta access is approved. You can turn Watch Me Fly email notifications
+on or off here any time, and if you also joined the beta application, update the information you
+gave us too.</p>
 
 <form id="loginForm">
   <label for="loginEmail">Email address</label><br>
@@ -27,6 +28,16 @@ beta access is approved.</p>
   <h2>Update Your Information</h2>
   <p id="emailDisplay"></p>
 
+  <h2>Email Preferences</h2>
+  <form id="prefsForm">
+    <input type="checkbox" id="wantsFlightStatus" name="wantsFlightStatus">
+    <label for="wantsFlightStatus">Notify me when a pilot goes live with Watch Me Fly — get an email when someone starts sharing a flight you can follow</label><br><br>
+    <button type="submit">Save Preferences</button>
+  </form>
+  <p id="prefsStatus" role="status" aria-live="polite"></p>
+
+  <div id="betaAppSection" hidden>
+  <h2>Beta Application</h2>
   <form id="updateForm">
     <label for="preferredName">What name do you go by?</label><br>
     <input type="text" id="preferredName" name="preferredName" style="width: 260px;"><br><br>
@@ -80,6 +91,7 @@ beta access is approved.</p>
   </form>
 
   <p id="updateStatus" role="status" aria-live="polite"></p>
+  </div>
 </div>
 
 <p><a href="signup.html">Back to the signup page</a> · <a href="leave.html">Leave the beta or update list</a></p>
@@ -101,8 +113,13 @@ const loginPasswordInput = document.getElementById("loginPassword");
 
 const accountSection = document.getElementById("accountSection");
 const emailDisplay = document.getElementById("emailDisplay");
+const betaAppSection = document.getElementById("betaAppSection");
 const updateForm = document.getElementById("updateForm");
 const updateStatus = document.getElementById("updateStatus");
+
+const prefsForm = document.getElementById("prefsForm");
+const prefsStatus = document.getElementById("prefsStatus");
+const wantsFlightStatusInput = document.getElementById("wantsFlightStatus");
 
 const preferredNameInput = document.getElementById("preferredName");
 const phoneInput = document.getElementById("phone");
@@ -147,33 +164,44 @@ loginForm.addEventListener("submit", async function (e) {
     accessToken = body.access_token;
     loggedInEmail = email;
 
+    // Email Preferences (Watch Me Fly) is shown for anyone who can log in at all —
+    // fetched independent of whether a beta_applications row exists, since that's a
+    // separate table from review_signups and someone may have joined Beta alone.
+    try {
+      const signupResp = await fetch(SUPABASE_URL + "/rest/v1/review_signups?email=eq." + encodeURIComponent(email) + "&select=wants_flight_status&limit=1",
+        { headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + accessToken } });
+      if (signupResp.ok) {
+        const signupRows = await signupResp.json();
+        wantsFlightStatusInput.checked = signupRows.length > 0 && !!signupRows[0].wants_flight_status;
+      }
+    } catch (err) {
+      // Non-fatal — the checkbox just starts unchecked if this fails.
+    }
+
     const appResp = await fetch(SUPABASE_URL + "/rest/v1/beta_applications?email=eq." + encodeURIComponent(email) + "&select=*&limit=1",
       { headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + accessToken } });
 
-    if (!appResp.ok) {
-      loginStatus.textContent = "Logged in, but could not load your information. Please try again later.";
-      return;
+    const rows = appResp.ok ? await appResp.json() : [];
+    if (rows.length > 0) {
+      const app = rows[0];
+      preferredNameInput.value = app.preferred_name || "";
+      phoneInput.value = app.phone || "";
+      yearsSimmingInput.value = app.years_simming || "";
+      aircraftFlownInput.value = app.aircraft_flown || "";
+      simPlatformInput.value = app.sim_platform || "";
+      interestReasonInput.value = app.interest_reason || "";
+      additionalInfoInput.value = app.additional_info || "";
+      setRadio("priorBeta", app.prior_beta_groups);
+      setRadio("currentBeta", app.current_beta_groups);
+      setRadio("commit4hrs", app.can_commit_4_hours);
+      betaAppSection.hidden = false;
+    } else {
+      // No beta_applications row (e.g. joined Beta alone, not both boxes) — the
+      // Email Preferences section above is still fully usable, just skip this part.
+      betaAppSection.hidden = true;
     }
 
-    const rows = await appResp.json();
-    if (!rows || rows.length === 0) {
-      loginStatus.textContent = "Logged in, but there's no beta application on file for this account — this page is only for people who joined both the beta and the update list.";
-      return;
-    }
-
-    const app = rows[0];
     emailDisplay.textContent = "Logged in as " + email;
-    preferredNameInput.value = app.preferred_name || "";
-    phoneInput.value = app.phone || "";
-    yearsSimmingInput.value = app.years_simming || "";
-    aircraftFlownInput.value = app.aircraft_flown || "";
-    simPlatformInput.value = app.sim_platform || "";
-    interestReasonInput.value = app.interest_reason || "";
-    additionalInfoInput.value = app.additional_info || "";
-    setRadio("priorBeta", app.prior_beta_groups);
-    setRadio("currentBeta", app.current_beta_groups);
-    setRadio("commit4hrs", app.can_commit_4_hours);
-
     loginStatus.textContent = "Logged in.";
     accountSection.hidden = false;
     loginForm.hidden = true;
@@ -181,6 +209,43 @@ loginForm.addEventListener("submit", async function (e) {
     loginStatus.textContent = "Could not reach the server. Check your connection and try again.";
   } finally {
     loginForm.querySelector("button").disabled = false;
+  }
+});
+
+prefsForm.addEventListener("submit", async function (e) {
+  e.preventDefault();
+  if (!accessToken || !loggedInEmail) return;
+
+  prefsStatus.textContent = "Saving...";
+  prefsForm.querySelector("button").disabled = true;
+
+  try {
+    // Upsert (merge-duplicates), not a plain PATCH — this may be the first time this
+    // email has ever had a review_signups row (e.g. joined Beta only, at signup time),
+    // so there might be nothing to PATCH yet. merge-duplicates only touches the
+    // columns sent here, so an existing row's list_status/unsubscribed/etc. are
+    // left untouched either way.
+    const resp = await fetch(SUPABASE_URL + "/rest/v1/review_signups", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": "Bearer " + accessToken,
+        "Prefer": "resolution=merge-duplicates,return=minimal"
+      },
+      body: JSON.stringify({
+        email: loggedInEmail,
+        wants_flight_status: wantsFlightStatusInput.checked
+      })
+    });
+
+    prefsStatus.textContent = resp.ok
+      ? "Your email preferences have been saved."
+      : "Could not save your preferences. Please try again.";
+  } catch (err) {
+    prefsStatus.textContent = "Could not reach the server. Check your connection and try again.";
+  } finally {
+    prefsForm.querySelector("button").disabled = false;
   }
 });
 
