@@ -310,10 +310,14 @@ async function patchProfile(profileId, body) {
 }
 
 async function patchListStatus(email, status) {
+  // Approving must also clear unsubscribed — otherwise re-approving someone who previously
+  // left the list keeps them silently excluded from every broadcast (the send always checks
+  // unsubscribed independently of list_status), with nothing on screen showing why.
+  const body = status === "approved" ? { list_status: status, unsubscribed: false } : { list_status: status };
   const resp = await fetch(SUPABASE_URL + "/rest/v1/review_signups?email=eq." + encodeURIComponent(email), {
     method: "PATCH",
     headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ list_status: status })
+    body: JSON.stringify(body)
   });
   return resp.ok;
 }
