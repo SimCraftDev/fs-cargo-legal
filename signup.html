@@ -18,7 +18,10 @@
     <label for="joinBeta">Join the FS Cargo Beta — the email and password you choose below will also be your login for the app once access is approved</label><br><br>
 
     <input type="checkbox" id="joinList" name="joinList" checked>
-    <label for="joinList">Join the FSC Update List — occasional emails about FS Cargo and other FSC Inc. projects</label>
+    <label for="joinList">Join the FSC Update List — occasional emails about FS Cargo and other FSC Inc. projects</label><br><br>
+
+    <input type="checkbox" id="wantsFlightStatus" name="wantsFlightStatus">
+    <label for="wantsFlightStatus">Notify me when a pilot goes live with Watch Me Fly — get an email when someone starts sharing a flight you can follow</label>
   </fieldset>
   <br>
 
@@ -111,6 +114,7 @@ const passwordConfirmInput = document.getElementById("passwordConfirm");
 const agreeCheck = document.getElementById("agreeCheck");
 const joinBeta = document.getElementById("joinBeta");
 const joinList = document.getElementById("joinList");
+const wantsFlightStatus = document.getElementById("wantsFlightStatus");
 const passwordSection = document.getElementById("passwordSection");
 
 const betaQuestions = document.getElementById("betaQuestions");
@@ -170,8 +174,8 @@ form.addEventListener("submit", async function (e) {
   const bothChecked = joinBeta.checked && joinList.checked;
 
   if (!email) return;
-  if (!joinBeta.checked && !joinList.checked) {
-    status.textContent = "Please choose at least one: the beta, the update list, or both.";
+  if (!joinBeta.checked && !joinList.checked && !wantsFlightStatus.checked) {
+    status.textContent = "Please choose at least one: the beta, the update list, flight status notifications, or any combination.";
     return;
   }
   if (!agreeCheck.checked) {
@@ -242,7 +246,8 @@ form.addEventListener("submit", async function (e) {
     }
 
     let listJoined = false;
-    if (joinList.checked) {
+    const wantsAnyRow = joinList.checked || wantsFlightStatus.checked;
+    if (wantsAnyRow) {
       const listResp = await fetch(SUPABASE_URL + "/rest/v1/review_signups", {
         method: "POST",
         headers: {
@@ -253,6 +258,7 @@ form.addEventListener("submit", async function (e) {
         },
         body: JSON.stringify({
           email: email,
+          wants_flight_status: wantsFlightStatus.checked,
           agreed_to_confidentiality: true,
           agreed_at: new Date().toISOString()
         })
@@ -298,17 +304,22 @@ form.addEventListener("submit", async function (e) {
 
     const pendingNote = " If you don't hear back within 24 hours, please reach out to us at 737flights@gmail.com.";
 
-    if (betaResult === "created" && joinList.checked) {
-      status.textContent = "Thanks for applying! Your beta application and update list signup are both pending approval." + pendingNote;
+    const listParts = [];
+    if (joinList.checked) listParts.push("update list");
+    if (wantsFlightStatus.checked) listParts.push("flight status notifications");
+    const listDesc = listParts.join(" and ");
+
+    if (betaResult === "created" && wantsAnyRow) {
+      status.textContent = `Thanks for applying! Your beta application and ${listDesc} signup are both pending approval.` + pendingNote;
     } else if (betaResult === "created") {
       status.textContent = "Your beta signup is pending approval." + pendingNote;
     } else if (betaResult === "exists") {
       status.textContent = "An account already exists for that email — use the FS Cargo app to log in instead." +
-        (joinList.checked ? " Your update list signup is pending approval." + pendingNote : "");
-    } else if (joinList.checked && listJoined) {
-      status.textContent = "You're on the FS Cargo update list! Your signup is pending approval." + pendingNote;
-    } else if (joinList.checked) {
-      status.textContent = "Could not add you to the update list. Please try again.";
+        (wantsAnyRow ? ` Your ${listDesc} signup is pending approval.` + pendingNote : "");
+    } else if (wantsAnyRow && listJoined) {
+      status.textContent = `You're signed up for ${listDesc}! Your signup is pending approval.` + pendingNote;
+    } else if (wantsAnyRow) {
+      status.textContent = "Could not complete your signup. Please try again.";
     }
 
     form.reset();
