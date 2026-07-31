@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FS Cargo — Watch Me Fly</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif; margin: 16px; }
+  #map { height: 420px; max-width: 900px; margin: 12px 0; border: 1px solid #888; }
+  .stat { margin: 2px 0; }
+  .plane { font-size: 22px; line-height: 22px; }
+  audio { width: 100%; max-width: 420px; }
+</style>
+</head>
+<body>
+<h1>Watch Me Fly</h1>
+
+<!-- The text readout comes before the map on purpose: it's the part that works for
+     screen-reader users, on a phone, or when the map tiles are slow to load. -->
+<div id="status" role="status" aria-live="polite">
+  <p id="statusLine">Loading flight…</p>
+</div>
+
+<div id="flightInfo" hidden>
+  <p class="stat" id="routeLine"></p>
+  <p class="stat" id="phaseLine"></p>
+  <p class="stat" id="altLine"></p>
+  <p class="stat" id="speedLine"></p>
+  <p class="stat" id="updatedLine"></p>
+</div>
+
+<div id="map" hidden></div>
+
+<div id="audioSection" hidden>
+  <h2>Latest Update from the Pilot</h2>
+  <p id="audioTime"></p>
+  <audio id="audioPlayer" controls preload="none"></audio>
+</div>
+
+<h2>What is this?</h2>
+<p>This page follows a live FS Cargo flight in Microsoft Flight Simulator. It updates by itself
+every 20 seconds — you don't need to refresh it, and you don't need an account.</p>
+
+<p><a href="signup.html">About FS Cargo</a></p>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const SUPABASE_URL = "https://nevontgkxsutisknkyui.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_rIUu5mYP3jWaoDQcxIdZWw_MZ4MVsfi";
+const REFRESH_MS = 20000;
+
+const params = new URLSearchParams(window.location.search);
+const token = params.get("t");
+
+const statusLine = document.getElementById("statusLine");
+const flightInfo = document.getElementById("flightInfo");
+const routeLine = document.getElementById("routeLine");
+const phaseLine = document.getElementById("phaseLine");
+const altLine = document.getElementById("altLine");
+const speedLine = document.getElementById("speedLine");
+const updatedLine = document.getElementById("updatedLine");
+const mapDiv = document.getElementById("map");
+const audioSection = document.getElementById("audioSection");
+const audioPlayer = document.getElementById("audioPlayer");
+const audioTime = document.getElementById("audioTime");
+
+let map = null, marker = null, trail = null;
+const trailPoints = [];
+let currentAudioUrl = null;
+let lastSpokenSummary = "";
+
+function ensureMap(lat, lon) {
+  if (map) return;
+  mapDiv.hidden = false;
+  map = L.map("map").setView([lat, lon], 7);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 18,
+    attribution: "&copy; OpenStreetMap contributors"
+  }).addTo(map);
+  trail = L.polyline([], { color: "#c9a227", weight: 3 }).addTo(map);
+}
+
+function planeIcon(heading) {
+  return L.divIcon({
+    className: "",
+    html: '<div class="plane" style="transform: rotate(' + (heading || 0) + 'deg);">✈️</div>',
+    iconSize: [22, 22],
+    iconAnchor: [11, 11]
+  });
+}
+
+function minutesAgo(iso) {
+  const secs = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (secs < 90) return "just now";
+  return Math.round(secs / 60) + " minutes ago";
+}
+
+function showNotFlying(message) {
+  statusLine.textContent = message;
+  flightInfo.hidden = true;
+  audioSection.hidden = true;
+  // The map is deliberately left visible if it was already drawn, so a viewer who was
+  // watching still sees where the flight got to rather than the page going blank.
+}
+
+async function refresh() {
+  if (!token) {
+    showNotFlying("This link is missing its flight code. Ask the pilot for the full link they copied.");
+    return;
+  }
+
+  let rows;
+  try {
+    const resp = await fetch(SUPABASE_URL + "/rest/v1/rpc/get_live_flight", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": "Bearer " + SUPABASE_ANON_KEY
+      },
+      body: JSON.stringify({ p_token: token })
+    });
+    if (!resp.ok) { showNotFlying("Could not reach the flight right now. Trying again shortly."); return; }
+    rows = await resp.json();
+  } catch (err) {
+    showNotFlying("Could not reach the flight right now. Trying again shortly.");
+    return;
+  }
+
+  if (!rows || rows.length === 0) {
+    showNotFlying("This pilot isn't flying right now. Check back when the next flight starts.");
+    return;
+  }
+
+  const f = rows[0];
+  const pilot = f.pilot_name || "The pilot";
+  const route = (f.from_icao && f.to_icao) ? (f.from_icao + " to " + f.to_icao) : "";
+
+  // Keep the headline sentence stable-but-informative — screen readers announce this
+  // region on change, so it should read as one natural sentence, not a pile of numbers.
+  const summary = pilot + (route ? " is flying " + route : " is flying") + ". " + (f.status_text || "");
+  statusLine.textContent = summary;
+  lastSpokenSummary = summary;
+
+  flightInfo.hidden = false;
+  routeLine.textContent = route ? ("Route: " + route) : "Route: not set";
+  phaseLine.textContent = "Status: " + (f.status_text || "unknown");
+  altLine.textContent = (f.altitude_ft != null)
+    ? ("Altitude: " + f.altitude_ft.toLocaleString() + " feet")
+    : "Altitude: unknown";
+  speedLine.textContent = (f.ground_speed_kt != null)
+    ? ("Ground speed: " + f.ground_speed_kt + " knots")
+    : "Ground speed: unknown";
+  updatedLine.textContent = "Last updated: " + minutesAgo(f.updated_at);
+
+  if (f.lat != null && f.lon != null) {
+    ensureMap(f.lat, f.lon);
+    const pos = [f.lat, f.lon];
+    if (!marker) marker = L.marker(pos, { icon: planeIcon(f.heading_deg) }).addTo(map);
+    else { marker.setLatLng(pos); marker.setIcon(planeIcon(f.heading_deg)); }
+    marker.bindPopup(pilot + " — " + (f.status_text || ""));
+
+    const last = trailPoints[trailPoints.length - 1];
+    if (!last || last[0] !== f.lat || last[1] !== f.lon) {
+      trailPoints.push(pos);
+      trail.setLatLngs(trailPoints);
+    }
+    map.panTo(pos);
+  }
+
+  // Only touch the player when the clip actually changed — resetting src on every
+  // refresh would restart playback out from under someone mid-listen.
+  if (f.audio_url) {
+    audioSection.hidden = false;
+    if (f.audio_url !== currentAudioUrl) {
+      currentAudioUrl = f.audio_url;
+      audioPlayer.src = f.audio_url;
+    }
+    audioTime.textContent = f.audio_updated_at
+      ? ("Recorded " + minutesAgo(f.audio_updated_at))
+      : "";
+  } else {
+    audioSection.hidden = true;
+    currentAudioUrl = null;
+    audioPlayer.removeAttribute("src");
+  }
+}
+
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>
