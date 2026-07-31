@@ -55,11 +55,30 @@ app uses, so nothing here works for a non-admin account regardless of what this 
     <input type="text" id="warningReasonBox" style="width: 400px;"><br>
     <button type="button" id="addWarningBtn">Add Warning</button>
 
+    <h4>Reset Password</h4>
+    <p>Use this if someone needs help logging in — sets their password directly, no email or reset link involved.</p>
+    <label for="newPasswordBox">New password (at least 8 characters)</label><br>
+    <input type="password" id="newPasswordBox" autocomplete="new-password" style="width: 260px;"><br>
+    <button type="button" id="resetPasswordBtn">Set New Password</button>
+
     <h4 style="color:#c00;">Danger Zone</h4>
     <button type="button" id="deleteBtn" style="color:#c00;">Delete Account Permanently</button>
 
     <p id="actionStatus" role="status" aria-live="polite"></p>
   </div>
+
+  <h2>Send Broadcast Email</h2>
+  <p>Sends to everyone with an approved update-list signup, or just the person currently selected above.</p>
+  <label for="broadcastSubject">Subject</label><br>
+  <input type="text" id="broadcastSubject" style="width: 400px;"><br><br>
+
+  <label for="broadcastBody">Message</label><br>
+  <textarea id="broadcastBody" rows="6" style="width: 400px;"></textarea><br><br>
+
+  <button type="button" id="sendAllBtn">Send to All Signups</button>
+  <button type="button" id="sendSelectedBtn">Send to Selected Person</button>
+
+  <p id="broadcastStatus" role="status" aria-live="polite"></p>
 </div>
 
 <h2>Contact Us</h2>
@@ -370,7 +389,7 @@ document.getElementById("deleteBtn").addEventListener("click", async () => {
   if (!confirmed) { setActionStatus("Deletion cancelled."); return; }
 
   setActionStatus("Deleting account...");
-  const resp = await fetch(SUPABASE_URL + "/functions/v1/delete-user", {
+  const resp = await fetch(SUPABASE_URL + "/functions/v1/web-delete-user", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ userId: selected.profileId })
@@ -378,6 +397,62 @@ document.getElementById("deleteBtn").addEventListener("click", async () => {
   const body = await resp.json().catch(() => ({}));
   setActionStatus(resp.ok ? "Account permanently deleted." : (body.error || "Could not delete account."));
   if (resp.ok) await refreshUsers();
+});
+
+document.getElementById("resetPasswordBtn").addEventListener("click", async () => {
+  if (!selected || !selected.profileId) { setActionStatus(selected ? selected.email + " has no FS Cargo account to reset." : ""); return; }
+  const newPasswordBox = document.getElementById("newPasswordBox");
+  const newPassword = newPasswordBox.value;
+  if (newPassword.length < 8) { setActionStatus("New password must be at least 8 characters."); return; }
+
+  setActionStatus("Setting new password...");
+  const resp = await fetch(SUPABASE_URL + "/functions/v1/admin-set-password", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ userId: selected.profileId, newPassword: newPassword })
+  });
+  const body = await resp.json().catch(() => ({}));
+  setActionStatus(resp.ok ? ("Password updated for " + selected.email + ".") : (body.error || "Could not set new password."));
+  if (resp.ok) newPasswordBox.value = "";
+});
+
+const broadcastStatus = document.getElementById("broadcastStatus");
+const broadcastSubject = document.getElementById("broadcastSubject");
+const broadcastBody = document.getElementById("broadcastBody");
+
+async function sendBroadcast(toEmail) {
+  const subject = broadcastSubject.value.trim();
+  const body = broadcastBody.value.trim();
+  if (!subject || !body) { broadcastStatus.textContent = "Enter both a subject and a message first."; return; }
+
+  broadcastStatus.textContent = toEmail ? ("Sending to " + toEmail + "...") : "Sending to all signups. This may take a moment.";
+  const resp = await fetch(SUPABASE_URL + "/functions/v1/web-send-broadcast", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ subject: subject, body: body, email: toEmail || "" })
+  });
+  const respBody = await resp.json().catch(() => ({}));
+
+  if (!resp.ok) {
+    broadcastStatus.textContent = respBody.error || ("HTTP " + resp.status);
+    return;
+  }
+
+  const sent = respBody.sent || 0, failed = respBody.failed || 0, total = respBody.total || 0;
+  broadcastStatus.textContent = failed === 0
+    ? ("Sent to all " + sent + " of " + total + " signups.")
+    : ("Sent to " + sent + " of " + total + " signups — " + failed + " failed.");
+
+  if (resp.ok) {
+    broadcastSubject.value = "";
+    broadcastBody.value = "";
+  }
+}
+
+document.getElementById("sendAllBtn").addEventListener("click", () => sendBroadcast(null));
+document.getElementById("sendSelectedBtn").addEventListener("click", () => {
+  if (!selected) { broadcastStatus.textContent = "Select someone in the list first."; return; }
+  sendBroadcast(selected.email);
 });
 </script>
 </body>
