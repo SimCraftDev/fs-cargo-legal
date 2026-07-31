@@ -23,6 +23,11 @@
     <input type="checkbox" id="wantsFlightStatus" name="wantsFlightStatus">
     <label for="wantsFlightStatus">Notify me when a pilot goes live with Watch Me Fly — get an email when someone starts sharing a flight you can follow</label>
   </fieldset>
+
+  <p id="flightStatusOnlyNote" hidden style="font-style: italic;">
+    Note: checking only "Notify me when a pilot goes live" does not make you a member of the FS Cargo Beta or the FSC Update List.
+    To join either of those, check their boxes above too.
+  </p>
   <br>
 
   <label for="email">Email address</label><br>
@@ -116,6 +121,7 @@ const joinBeta = document.getElementById("joinBeta");
 const joinList = document.getElementById("joinList");
 const wantsFlightStatus = document.getElementById("wantsFlightStatus");
 const passwordSection = document.getElementById("passwordSection");
+const flightStatusOnlyNote = document.getElementById("flightStatusOnlyNote");
 
 const betaQuestions = document.getElementById("betaQuestions");
 const yearsSimmingInput = document.getElementById("yearsSimming");
@@ -158,13 +164,23 @@ function syncBetaQuestions() {
   ndaAckInput.required = showBetaQuestions;
 }
 
+function syncFlightStatusOnlyNote() {
+  flightStatusOnlyNote.hidden = !(wantsFlightStatus.checked && !joinBeta.checked && !joinList.checked);
+}
+
 joinBeta.addEventListener("change", function () {
   syncPasswordSection();
   syncBetaQuestions();
+  syncFlightStatusOnlyNote();
 });
-joinList.addEventListener("change", syncBetaQuestions);
+joinList.addEventListener("change", function () {
+  syncBetaQuestions();
+  syncFlightStatusOnlyNote();
+});
+wantsFlightStatus.addEventListener("change", syncFlightStatusOnlyNote);
 syncPasswordSection();
 syncBetaQuestions();
+syncFlightStatusOnlyNote();
 
 form.addEventListener("submit", async function (e) {
   e.preventDefault();
