@@ -92,6 +92,31 @@ gave us too.</p>
 
   <p id="updateStatus" role="status" aria-live="polite"></p>
   </div>
+
+  <h2>Support</h2>
+  <div id="existingTicket" hidden>
+    <h3>Your Current Ticket</h3>
+    <p id="ticketSummary"></p>
+    <div id="ticketReplyBlock" hidden>
+      <h3>Our Reply</h3>
+      <p id="ticketReply"></p>
+    </div>
+  </div>
+
+  <div id="newTicketBlock">
+    <p>Need help with something? Send us a support request below and we'll get back to you.</p>
+    <form id="ticketForm">
+      <label for="ticketSubject">What's it about?</label><br>
+      <input type="text" id="ticketSubject" style="width: 400px;" required><br><br>
+
+      <label for="ticketBody">Tell us what's going on</label><br>
+      <textarea id="ticketBody" rows="6" style="width: 400px;" required></textarea><br><br>
+
+      <button type="submit">Send Support Request</button>
+    </form>
+  </div>
+
+  <p id="ticketStatus" role="status" aria-live="polite"></p>
 </div>
 
 <p><a href="signup.html">Back to the signup page</a> · <a href="leave.html">Leave the beta or update list</a></p>
@@ -120,6 +145,16 @@ const updateStatus = document.getElementById("updateStatus");
 const prefsForm = document.getElementById("prefsForm");
 const prefsStatus = document.getElementById("prefsStatus");
 const wantsFlightStatusInput = document.getElementById("wantsFlightStatus");
+
+const ticketForm = document.getElementById("ticketForm");
+const ticketStatus = document.getElementById("ticketStatus");
+const ticketSubject = document.getElementById("ticketSubject");
+const ticketBody = document.getElementById("ticketBody");
+const existingTicket = document.getElementById("existingTicket");
+const ticketSummary = document.getElementById("ticketSummary");
+const ticketReplyBlock = document.getElementById("ticketReplyBlock");
+const ticketReply = document.getElementById("ticketReply");
+const newTicketBlock = document.getElementById("newTicketBlock");
 
 const preferredNameInput = document.getElementById("preferredName");
 const phoneInput = document.getElementById("phone");
@@ -205,6 +240,8 @@ loginForm.addEventListener("submit", async function (e) {
     loginStatus.textContent = "Logged in.";
     accountSection.hidden = false;
     loginForm.hidden = true;
+
+    await loadTicket();
   } catch (err) {
     loginStatus.textContent = "Could not reach the server. Check your connection and try again.";
   } finally {
@@ -246,6 +283,107 @@ prefsForm.addEventListener("submit", async function (e) {
     prefsStatus.textContent = "Could not reach the server. Check your connection and try again.";
   } finally {
     prefsForm.querySelector("button").disabled = false;
+  }
+});
+
+// Wording is close to what the pilot dictated, but their message was cut off mid-sentence
+// by a keyboard problem — this is a sensible completion, easy to reword in one place.
+const DUPLICATE_TICKET_MESSAGE =
+  "We are sorry for your troubles, however you have entered a ticket request when you already " +
+  "have a ticket that is unresolved. Please wait until we have answered your current ticket " +
+  "before sending another one.";
+
+// An 'open' ticket blocks a new one. Once an admin marks it answered or resolved, the
+// person is free to send another — matching the "yet been cleared or answered" rule.
+async function loadTicket() {
+  if (!accessToken || !loggedInEmail) return;
+
+  try {
+    const resp = await fetch(SUPABASE_URL + "/rest/v1/support_tickets?email=eq." +
+        encodeURIComponent(loggedInEmail) + "&select=*&order=created_at.desc&limit=1",
+      { headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + accessToken } });
+    if (!resp.ok) return;
+
+    const rows = await resp.json();
+    if (!rows || rows.length === 0) {
+      existingTicket.hidden = true;
+      newTicketBlock.hidden = false;
+      return;
+    }
+
+    const t = rows[0];
+    const opened = new Date(t.created_at).toLocaleDateString();
+    existingTicket.hidden = false;
+    ticketSummary.textContent =
+      "\"" + t.subject + "\" — sent " + opened + ". Status: " +
+      (t.status === "open" ? "waiting for a reply" : t.status) + ".";
+
+    if (t.admin_reply) {
+      ticketReplyBlock.hidden = false;
+      ticketReply.textContent = t.admin_reply;
+    } else {
+      ticketReplyBlock.hidden = true;
+    }
+
+    // Only an unresolved ('open') ticket hides the form.
+    const blocked = t.status === "open";
+    newTicketBlock.hidden = blocked;
+    ticketStatus.textContent = blocked ? DUPLICATE_TICKET_MESSAGE : "";
+  } catch (err) {
+    // Non-fatal — leave the form available rather than locking someone out of support
+    // because a status lookup happened to fail.
+  }
+}
+
+ticketForm.addEventListener("submit", async function (e) {
+  e.preventDefault();
+  if (!accessToken || !loggedInEmail) {
+    ticketStatus.textContent = "You need to be logged in to send a support request.";
+    return;
+  }
+
+  const subject = ticketSubject.value.trim();
+  const body = ticketBody.value.trim();
+  if (!subject || !body) {
+    ticketStatus.textContent = "Please fill in both boxes so we know how to help.";
+    return;
+  }
+
+  ticketStatus.textContent = "Sending your support request...";
+  ticketForm.querySelector("button").disabled = true;
+
+  try {
+    const resp = await fetch(SUPABASE_URL + "/rest/v1/support_tickets", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": "Bearer " + accessToken,
+        "Prefer": "return=minimal"
+      },
+      body: JSON.stringify({ email: loggedInEmail, subject: subject, body: body })
+    });
+
+    if (resp.ok) {
+      ticketSubject.value = "";
+      ticketBody.value = "";
+      ticketStatus.textContent = "Thanks — your support request has been sent. We'll get back to you by email.";
+      await loadTicket();
+      return;
+    }
+
+    // 409 is the database's own one-open-ticket rule firing. It can happen even though
+    // the form was showing, e.g. two tabs open or a double submit, so the friendly
+    // message lives here too rather than only in loadTicket.
+    const text = await resp.text();
+    ticketStatus.textContent = (resp.status === 409 || text.indexOf("support_tickets_one_open_per_email") !== -1)
+      ? DUPLICATE_TICKET_MESSAGE
+      : "Could not send your support request. Please try again.";
+    await loadTicket();
+  } catch (err) {
+    ticketStatus.textContent = "Could not reach the server. Check your connection and try again.";
+  } finally {
+    ticketForm.querySelector("button").disabled = false;
   }
 });
 
