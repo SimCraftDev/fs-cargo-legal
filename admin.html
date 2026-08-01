@@ -67,6 +67,25 @@ app uses, so nothing here works for a non-admin account regardless of what this 
     <p id="actionStatus" role="status" aria-live="polite"></p>
   </div>
 
+  <h2>Support Tickets</h2>
+  <button type="button" id="refreshTicketsBtn">Refresh Tickets</button>
+  <p id="ticketsStatus" role="status" aria-live="polite"></p>
+
+  <label for="ticketSelect">Select a ticket</label><br>
+  <select id="ticketSelect" size="8" style="width: 100%; max-width: 700px;"></select>
+
+  <div id="ticketDetail" hidden>
+    <h3>Ticket</h3>
+    <p id="ticketDetailText" style="white-space: pre-line;"></p>
+
+    <label for="ticketReplyBox">Your reply</label><br>
+    <textarea id="ticketReplyBox" rows="5" style="width: 400px;"></textarea><br>
+    <button type="button" id="saveReplyBtn">Save Reply and Mark Answered</button>
+    <button type="button" id="resolveTicketBtn">Mark Resolved</button>
+    <button type="button" id="reopenTicketBtn">Reopen</button>
+    <p id="ticketActionStatus" role="status" aria-live="polite"></p>
+  </div>
+
   <h2>Send Broadcast Email</h2>
   <p>Sends to everyone with an approved update-list signup, or just the person currently selected above.</p>
   <label for="broadcastSubject">Subject</label><br>
@@ -158,6 +177,7 @@ loginForm.addEventListener("submit", async function (e) {
     loginForm.hidden = true;
     adminSection.hidden = false;
     await refreshUsers();
+    await refreshTickets();
   } catch (err) {
     loginStatus.textContent = "Could not reach the server. Check your connection and try again.";
   } finally {
@@ -418,6 +438,93 @@ document.getElementById("resetPasswordBtn").addEventListener("click", async () =
   const body = await resp.json().catch(() => ({}));
   setActionStatus(resp.ok ? ("Password updated for " + selected.email + ".") : (body.error || "Could not set new password."));
   if (resp.ok) newPasswordBox.value = "";
+});
+
+// ── Support tickets ────────────────────────────────────────────────────────
+let tickets = [];
+let selectedTicket = null;
+
+const ticketsStatus = document.getElementById("ticketsStatus");
+const ticketSelect = document.getElementById("ticketSelect");
+const ticketDetail = document.getElementById("ticketDetail");
+const ticketDetailText = document.getElementById("ticketDetailText");
+const ticketReplyBox = document.getElementById("ticketReplyBox");
+const ticketActionStatus = document.getElementById("ticketActionStatus");
+
+async function refreshTickets() {
+  ticketsStatus.textContent = "Loading tickets...";
+  ticketDetail.hidden = true;
+  selectedTicket = null;
+
+  tickets = await fetchAll("/rest/v1/support_tickets?select=*&order=created_at.desc");
+
+  // Sorted here rather than in the query: ordering by the status column would be
+  // alphabetical (answered, open, resolved), which buries the tickets actually waiting
+  // on a reply in the middle. This puts open first, then answered, then resolved.
+  const rank = { open: 0, answered: 1, resolved: 2 };
+  tickets.sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9));
+
+  ticketSelect.innerHTML = "";
+  tickets.forEach((t, idx) => {
+    const opt = document.createElement("option");
+    opt.value = idx;
+    opt.textContent = "[" + t.status.toUpperCase() + "] " + t.email + " — " + t.subject +
+      " — " + new Date(t.created_at).toLocaleDateString();
+    ticketSelect.appendChild(opt);
+  });
+
+  const openCount = tickets.filter(t => t.status === "open").length;
+  ticketsStatus.textContent = tickets.length + " ticket(s), " + openCount + " waiting for a reply.";
+}
+
+ticketSelect.addEventListener("change", function () {
+  if (ticketSelect.value === "") return;
+  selectedTicket = tickets[ticketSelect.value];
+  ticketDetail.hidden = false;
+  ticketActionStatus.textContent = "";
+  ticketDetailText.textContent =
+    "From: " + selectedTicket.email + "\n" +
+    "Subject: " + selectedTicket.subject + "\n" +
+    "Status: " + selectedTicket.status + "\n" +
+    "Sent: " + new Date(selectedTicket.created_at).toLocaleString() + "\n\n" +
+    selectedTicket.body;
+  ticketReplyBox.value = selectedTicket.admin_reply || "";
+});
+
+async function patchTicket(id, body, successMessage) {
+  ticketActionStatus.textContent = "Saving...";
+  try {
+    const resp = await fetch(SUPABASE_URL + "/rest/v1/support_tickets?id=eq." + encodeURIComponent(id), {
+      method: "PATCH",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(Object.assign({ updated_at: new Date().toISOString() }, body))
+    });
+    ticketActionStatus.textContent = resp.ok ? successMessage : "Could not update the ticket. Try again.";
+    if (resp.ok) await refreshTickets();
+  } catch (err) {
+    ticketActionStatus.textContent = "Could not reach the server. Try again.";
+  }
+}
+
+document.getElementById("refreshTicketsBtn").addEventListener("click", refreshTickets);
+
+document.getElementById("saveReplyBtn").addEventListener("click", async () => {
+  if (!selectedTicket) { ticketActionStatus.textContent = "Select a ticket first."; return; }
+  const reply = ticketReplyBox.value.trim();
+  if (!reply) { ticketActionStatus.textContent = "Write a reply first."; return; }
+  // Answered (not resolved) — this is what unblocks them to send another ticket.
+  await patchTicket(selectedTicket.id, { admin_reply: reply, status: "answered" },
+    "Reply saved. They can see it on their account page and can now open a new ticket.");
+});
+
+document.getElementById("resolveTicketBtn").addEventListener("click", async () => {
+  if (!selectedTicket) { ticketActionStatus.textContent = "Select a ticket first."; return; }
+  await patchTicket(selectedTicket.id, { status: "resolved" }, "Ticket marked resolved.");
+});
+
+document.getElementById("reopenTicketBtn").addEventListener("click", async () => {
+  if (!selectedTicket) { ticketActionStatus.textContent = "Select a ticket first."; return; }
+  await patchTicket(selectedTicket.id, { status: "open" }, "Ticket reopened.");
 });
 
 const broadcastStatus = document.getElementById("broadcastStatus");
