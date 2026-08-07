@@ -73,9 +73,13 @@
 
   <p id="reactionCounts" class="muted"></p>
 
+  <!-- readonly rather than disabled: a disabled input is skipped by most screen readers, so
+       a blind viewer would hear nothing at all where the message box should be and conclude
+       the page was broken. Readonly keeps it reachable and lets the placeholder explain why
+       it is not usable yet. The Send button IS disabled — that one should not be reachable. -->
   <label for="msgInput">Your message</label>
-  <input type="text" id="msgInput" maxlength="500" disabled
-         placeholder="Raise your hand and wait for the pilot to open you for questions">
+  <input type="text" id="msgInput" maxlength="500" readonly aria-disabled="true"
+         placeholder="Raise your hand — the pilot will open you for questions">
   <div><button id="sendBtn" type="button" disabled>Send</button></div>
 </fieldset>
 
@@ -305,6 +309,18 @@ introPlayBtn.addEventListener("click", () => {
 
 // ── The room ───────────────────────────────────────────────────────────────
 
+// The message box is made READONLY rather than disabled when the viewer may not send.
+// A disabled input is skipped by most screen readers, so a blind viewer hears nothing
+// where the box should be and reasonably concludes the page is broken. Readonly keeps it
+// in the reading order and lets the placeholder say WHY it cannot be used yet. The Send
+// button stays properly disabled — that one genuinely should not be reachable.
+function setCanSend(canSend, why) {
+  msgInput.readOnly = !canSend;
+  msgInput.setAttribute("aria-disabled", canSend ? "false" : "true");
+  msgInput.placeholder = why;
+  sendBtn.disabled = !canSend;
+}
+
 function applyState(s) {
   state = s;
 
@@ -313,7 +329,7 @@ function applyState(s) {
     // them to come back in a private window.
     partStatus.textContent = "The pilot isn't taking questions from you right now.";
     handBtn.disabled = likeBtn.disabled = dislikeBtn.disabled = true;
-    msgInput.disabled = sendBtn.disabled = true;
+    setCanSend(false, "Messages are closed to you right now.");
     return;
   }
 
@@ -322,20 +338,24 @@ function applyState(s) {
   likeBtn.disabled = dislikeBtn.disabled = false;
 
   const canSend = s.floor_open && s.granted && !s.muted;
-  msgInput.disabled = sendBtn.disabled = !canSend;
 
   if (canSend) {
-    msgInput.placeholder = "Type your question and press Enter";
+    setCanSend(true, "Type your question and press Enter");
     partStatus.textContent = "The pilot has opened you for questions — go ahead.";
   } else if (s.muted) {
+    setCanSend(false, "The pilot has muted you for now");
     partStatus.textContent = "The pilot has muted you for now.";
   } else if (s.hand_disabled) {
+    setCanSend(false, "The pilot isn't taking hand raises from you right now");
     partStatus.textContent = "The pilot isn't taking hand raises from you right now.";
   } else if (!s.floor_open) {
+    setCanSend(false, "The floor is closed — you can still like or dislike");
     partStatus.textContent = "The floor is closed. You can still like or dislike.";
   } else if (s.hand_raised) {
+    setCanSend(false, "Your hand is up — waiting for the pilot");
     partStatus.textContent = "Your hand is up. Wait for the pilot to open you for questions.";
   } else {
+    setCanSend(false, "Raise your hand — the pilot will open you for questions");
     partStatus.textContent = "Raise your hand if you'd like to ask something.";
   }
 
