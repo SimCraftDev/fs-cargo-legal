@@ -11,6 +11,15 @@
   .stat { margin: 2px 0; }
   .plane { font-size: 22px; line-height: 22px; }
   audio { width: 100%; max-width: 420px; }
+  fieldset { max-width: 900px; margin: 16px 0; border: 1px solid #888; }
+  label { display: block; margin: 8px 0 4px; font-weight: 600; }
+  input[type=text] { padding: 8px; font-size: 15px; width: 100%; max-width: 420px; box-sizing: border-box; }
+  button { padding: 10px 16px; font-size: 15px; margin: 4px 6px 4px 0; cursor: pointer; }
+  button[disabled] { cursor: not-allowed; opacity: .55; }
+  #qaList { list-style: none; padding: 0; max-width: 900px; }
+  #qaList li { border-bottom: 1px solid #ccc; padding: 10px 0; }
+  .qaAnswer { margin: 6px 0 0 16px; font-weight: 600; }
+  .muted { color: #555; }
 </style>
 </head>
 <body>
@@ -38,9 +47,44 @@
   <audio id="audioPlayer" controls preload="none"></audio>
 </div>
 
+<!-- Intro clip. Hidden until the pilot actually presses Play, and only revealed as a
+     button when the browser refuses to autoplay (which it will for anyone who hasn't
+     interacted with the page yet). Never left as a control that silently does nothing. -->
+<div id="introSection" hidden>
+  <h2>Message from the Pilot</h2>
+  <p id="introHint" class="muted"></p>
+  <audio id="introPlayer" preload="none"></audio>
+  <button id="introPlayBtn" hidden type="button">Play the pilot's intro</button>
+</div>
+
+<fieldset id="takePart">
+  <legend>Take Part</legend>
+
+  <div role="status" aria-live="polite"><p id="partStatus">Connecting…</p></div>
+
+  <label for="nameInput">Your name</label>
+  <input type="text" id="nameInput" maxlength="40" placeholder="What should the pilot call you?">
+
+  <div>
+    <button id="handBtn" type="button">Raise hand</button>
+    <button id="likeBtn" type="button">Like</button>
+    <button id="dislikeBtn" type="button">Dislike</button>
+  </div>
+
+  <p id="reactionCounts" class="muted"></p>
+
+  <label for="msgInput">Your message</label>
+  <input type="text" id="msgInput" maxlength="500" disabled
+         placeholder="Raise your hand and wait for the pilot to open you for questions">
+  <div><button id="sendBtn" type="button" disabled>Send</button></div>
+</fieldset>
+
+<h2>Questions and Answers</h2>
+<ul id="qaList"><li class="muted" id="qaEmpty">Nothing yet.</li></ul>
+
 <h2>What is this?</h2>
-<p>This page follows a live FS Cargo flight in Microsoft Flight Simulator. It updates by itself
-every 20 seconds — you don't need to refresh it, and you don't need an account.</p>
+<p>This page follows a live FS Cargo flight in Microsoft Flight Simulator. It updates by itself —
+you don't need to refresh it, and you don't need an account.</p>
 
 <p><a href="signup.html">About FS Cargo</a></p>
 
@@ -48,7 +92,8 @@ every 20 seconds — you don't need to refresh it, and you don't need an account
 <script>
 const SUPABASE_URL = "https://nevontgkxsutisknkyui.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_rIUu5mYP3jWaoDQcxIdZWw_MZ4MVsfi";
-const REFRESH_MS = 20000;
+const FLIGHT_MS = 20000;   // matches how often the app pushes position
+const ROOM_MS   = 8000;    // Q&A needs to feel closer to live than the map does
 
 const params = new URLSearchParams(window.location.search);
 const token = params.get("t");
@@ -65,10 +110,63 @@ const audioSection = document.getElementById("audioSection");
 const audioPlayer = document.getElementById("audioPlayer");
 const audioTime = document.getElementById("audioTime");
 
+const introSection = document.getElementById("introSection");
+const introPlayer = document.getElementById("introPlayer");
+const introPlayBtn = document.getElementById("introPlayBtn");
+const introHint = document.getElementById("introHint");
+
+const partStatus = document.getElementById("partStatus");
+const nameInput = document.getElementById("nameInput");
+const handBtn = document.getElementById("handBtn");
+const likeBtn = document.getElementById("likeBtn");
+const dislikeBtn = document.getElementById("dislikeBtn");
+const reactionCounts = document.getElementById("reactionCounts");
+const msgInput = document.getElementById("msgInput");
+const sendBtn = document.getElementById("sendBtn");
+const qaList = document.getElementById("qaList");
+
 let map = null, marker = null, trail = null;
 const trailPoints = [];
 let currentAudioUrl = null;
-let lastSpokenSummary = "";
+
+// ── Viewer identity ────────────────────────────────────────────────────────
+// A random id kept in this browser. It is NOT a security boundary — the pilot's
+// raise-hand permission is, and that is enforced in the database. This only
+// answers "which row in the pilot's list is you", so it survives a refresh.
+const VIEWER_KEY = "fscargo_viewer_id";
+let viewerId = localStorage.getItem(VIEWER_KEY);
+if (!viewerId) {
+  viewerId = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()) + Date.now())
+    .replace(/-/g, "");
+  localStorage.setItem(VIEWER_KEY, viewerId);
+}
+
+const NAME_KEY = "fscargo_viewer_name";
+nameInput.value = localStorage.getItem(NAME_KEY) || "";
+nameInput.addEventListener("change", () => {
+  localStorage.setItem(NAME_KEY, nameInput.value.trim());
+});
+
+let state = { floor_open: false, chat_open: false, granted: false, muted: false,
+              hand_raised: false, hand_disabled: false, blocked: false };
+let hasInteracted = false;
+let lastIntroPlayId = localStorage.getItem("fscargo_intro_" + (token || "")) || null;
+
+async function rpc(fn, body) {
+  try {
+    const resp = await fetch(SUPABASE_URL + "/rest/v1/rpc/" + fn, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": "Bearer " + SUPABASE_ANON_KEY
+      },
+      body: JSON.stringify(body)
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (e) { return null; }
+}
 
 function ensureMap(lat, lon) {
   if (map) return;
@@ -104,30 +202,16 @@ function showNotFlying(message) {
   // watching still sees where the flight got to rather than the page going blank.
 }
 
-async function refresh() {
+// ── Flight data ────────────────────────────────────────────────────────────
+
+async function refreshFlight() {
   if (!token) {
     showNotFlying("This link is missing its flight code. Ask the pilot for the full link they copied.");
     return;
   }
 
-  let rows;
-  try {
-    const resp = await fetch(SUPABASE_URL + "/rest/v1/rpc/get_live_flight", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "apikey": SUPABASE_ANON_KEY,
-        "Authorization": "Bearer " + SUPABASE_ANON_KEY
-      },
-      body: JSON.stringify({ p_token: token })
-    });
-    if (!resp.ok) { showNotFlying("Could not reach the flight right now. Trying again shortly."); return; }
-    rows = await resp.json();
-  } catch (err) {
-    showNotFlying("Could not reach the flight right now. Trying again shortly.");
-    return;
-  }
-
+  const rows = await rpc("get_live_flight", { p_token: token });
+  if (rows === null) { showNotFlying("Could not reach the flight right now. Trying again shortly."); return; }
   if (!rows || rows.length === 0) {
     showNotFlying("This pilot isn't flying right now. Check back when the next flight starts.");
     return;
@@ -139,9 +223,7 @@ async function refresh() {
 
   // Keep the headline sentence stable-but-informative — screen readers announce this
   // region on change, so it should read as one natural sentence, not a pile of numbers.
-  const summary = pilot + (route ? " is flying " + route : " is flying") + ". " + (f.status_text || "");
-  statusLine.textContent = summary;
-  lastSpokenSummary = summary;
+  statusLine.textContent = pilot + (route ? " is flying " + route : " is flying") + ". " + (f.status_text || "");
 
   flightInfo.hidden = false;
   routeLine.textContent = route ? ("Route: " + route) : "Route: not set";
@@ -177,9 +259,7 @@ async function refresh() {
       currentAudioUrl = f.audio_url;
       audioPlayer.src = f.audio_url;
     }
-    audioTime.textContent = f.audio_updated_at
-      ? ("Recorded " + minutesAgo(f.audio_updated_at))
-      : "";
+    audioTime.textContent = f.audio_updated_at ? ("Recorded " + minutesAgo(f.audio_updated_at)) : "";
   } else {
     audioSection.hidden = true;
     currentAudioUrl = null;
@@ -187,8 +267,205 @@ async function refresh() {
   }
 }
 
-refresh();
-setInterval(refresh, REFRESH_MS);
+// ── Intro ──────────────────────────────────────────────────────────────────
+
+function maybePlayIntro(s) {
+  if (!s.intro_play_id || !s.intro_audio_url) return;
+  if (s.intro_play_id === lastIntroPlayId) return;   // already handled this press
+
+  lastIntroPlayId = s.intro_play_id;
+  localStorage.setItem("fscargo_intro_" + token, s.intro_play_id);
+
+  introSection.hidden = false;
+  introPlayer.src = s.intro_audio_url;
+
+  const attempt = introPlayer.play();
+  if (attempt && typeof attempt.catch === "function") {
+    attempt
+      .then(() => {
+        introPlayBtn.hidden = true;
+        introHint.textContent = "Playing the pilot's intro.";
+      })
+      .catch(() => {
+        // Browsers block audio until the visitor has interacted with the page. Rather
+        // than fail silently, surface a real button and say so.
+        introPlayBtn.hidden = false;
+        introHint.textContent = "The pilot started their intro. Your browser needs a tap first — press the button to hear it.";
+        introPlayBtn.focus();
+      });
+  }
+}
+
+introPlayBtn.addEventListener("click", () => {
+  hasInteracted = true;
+  introPlayer.play();
+  introPlayBtn.hidden = true;
+  introHint.textContent = "Playing the pilot's intro.";
+});
+
+// ── The room ───────────────────────────────────────────────────────────────
+
+function applyState(s) {
+  state = s;
+
+  if (s.blocked) {
+    // Deliberately neutral wording. Telling someone they are blocked mostly teaches
+    // them to come back in a private window.
+    partStatus.textContent = "The pilot isn't taking questions from you right now.";
+    handBtn.disabled = likeBtn.disabled = dislikeBtn.disabled = true;
+    msgInput.disabled = sendBtn.disabled = true;
+    return;
+  }
+
+  handBtn.disabled = s.hand_disabled;
+  handBtn.textContent = s.hand_raised ? "Lower hand" : "Raise hand";
+  likeBtn.disabled = dislikeBtn.disabled = false;
+
+  const canSend = s.floor_open && s.granted && !s.muted;
+  msgInput.disabled = sendBtn.disabled = !canSend;
+
+  if (canSend) {
+    msgInput.placeholder = "Type your question and press Enter";
+    partStatus.textContent = "The pilot has opened you for questions — go ahead.";
+  } else if (s.muted) {
+    partStatus.textContent = "The pilot has muted you for now.";
+  } else if (s.hand_disabled) {
+    partStatus.textContent = "The pilot isn't taking hand raises from you right now.";
+  } else if (!s.floor_open) {
+    partStatus.textContent = "The floor is closed. You can still like or dislike.";
+  } else if (s.hand_raised) {
+    partStatus.textContent = "Your hand is up. Wait for the pilot to open you for questions.";
+  } else {
+    partStatus.textContent = "Raise your hand if you'd like to ask something.";
+  }
+
+  reactionCounts.textContent =
+    (s.like_count || 0) + " like" + (s.like_count === 1 ? "" : "s") + ", " +
+    (s.dislike_count || 0) + " dislike" + (s.dislike_count === 1 ? "" : "s");
+
+  maybePlayIntro(s);
+}
+
+async function refreshRoom() {
+  if (!token) return;
+
+  const rows = await rpc("wmf_join_flight", {
+    p_token: token,
+    p_viewer_id: viewerId,
+    p_name: nameInput.value.trim()
+  });
+  if (!rows || rows.length === 0) {
+    partStatus.textContent = "Not connected to a live flight.";
+    return;
+  }
+  applyState(rows[0]);
+
+  const qa = await rpc("wmf_get_qa", { p_token: token });
+  renderQa(Array.isArray(qa) ? qa : []);
+}
+
+function renderQa(rows) {
+  qaList.innerHTML = "";
+  if (rows.length === 0) {
+    const li = document.createElement("li");
+    li.className = "muted";
+    li.textContent = state.chat_open
+      ? "No messages yet."
+      : "No answered questions yet.";
+    qaList.appendChild(li);
+    return;
+  }
+
+  // Oldest first reads more naturally than the newest-first order the RPC returns.
+  rows.slice().reverse().forEach(r => {
+    const li = document.createElement("li");
+
+    const q = document.createElement("div");
+    q.textContent = (r.display_name || "Someone") + ": " + r.body;
+    li.appendChild(q);
+
+    if (r.answer_text) {
+      const a = document.createElement("div");
+      a.className = "qaAnswer";
+      a.textContent = "Pilot: " + r.answer_text;
+      li.appendChild(a);
+    }
+    if (r.answer_audio_url) {
+      const au = document.createElement("audio");
+      au.controls = true;
+      au.preload = "none";
+      au.src = r.answer_audio_url;
+      li.appendChild(au);
+    }
+    qaList.appendChild(li);
+  });
+}
+
+// ── Actions ────────────────────────────────────────────────────────────────
+
+handBtn.addEventListener("click", async () => {
+  hasInteracted = true;
+  const want = !state.hand_raised;
+  await rpc("wmf_set_hand", { p_token: token, p_viewer_id: viewerId, p_raised: want });
+  partStatus.textContent = want ? "Hand raised." : "Hand lowered.";
+  refreshRoom();
+});
+
+async function react(kind) {
+  hasInteracted = true;
+  // Tapping the same one again clears it, so a viewer can change their mind.
+  const next = state.reaction === kind ? null : kind;
+  await rpc("wmf_set_reaction", { p_token: token, p_viewer_id: viewerId, p_reaction: next });
+  state.reaction = next;
+  partStatus.textContent = next ? ("You " + next + "d this flight.") : "Reaction cleared.";
+  refreshRoom();
+}
+likeBtn.addEventListener("click", () => react("like"));
+dislikeBtn.addEventListener("click", () => react("dislike"));
+
+const SEND_REASONS = {
+  ok: "Sent.",
+  empty: "Type something first.",
+  too_long: "That message is too long.",
+  too_fast: "Just a moment — you can send another message in a few seconds.",
+  blocked: "The pilot isn't taking questions from you right now.",
+  floor_closed: "The floor is closed right now.",
+  not_joined: "Reconnecting — try again in a moment.",
+  muted: "The pilot has muted you for now.",
+  not_granted: "Raise your hand and wait for the pilot to open you for questions.",
+  no_flight: "This pilot isn't flying right now."
+};
+
+async function send() {
+  hasInteracted = true;
+  const body = msgInput.value.trim();
+  if (!body) { partStatus.textContent = "Type something first."; return; }
+
+  sendBtn.disabled = true;
+  const res = await rpc("wmf_post_question", {
+    p_token: token, p_viewer_id: viewerId, p_body: body
+  });
+  // A scalar-returning function comes back as a bare JSON string.
+  const reason = typeof res === "string" ? res : (res && res[0]) || "";
+  partStatus.textContent = SEND_REASONS[reason] || "Could not send that.";
+  if (reason === "ok") msgInput.value = "";
+
+  sendBtn.disabled = false;
+  refreshRoom();
+}
+
+sendBtn.addEventListener("click", send);
+// Enter sends, wired on the input itself rather than relying on implicit form submit.
+msgInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); send(); }
+});
+
+// ── Go ─────────────────────────────────────────────────────────────────────
+
+refreshFlight();
+refreshRoom();
+setInterval(refreshFlight, FLIGHT_MS);
+setInterval(refreshRoom, ROOM_MS);
 </script>
 </body>
 </html>
