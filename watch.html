@@ -83,6 +83,15 @@
   <div><button id="sendBtn" type="button" disabled>Send</button></div>
 </fieldset>
 
+<!-- Live video sits BELOW the status readout and Take Part on purpose. A video iframe is a
+     large obstacle to tab through, and the text status plus the Q&A are the parts that work
+     for screen-reader users and on a phone. Reading order stays: status, participate, then
+     watch. Only rendered while the pilot has actually switched it on. -->
+<div id="streamSection" hidden>
+  <h2>Live Stream</h2>
+  <div id="streamHolder"></div>
+</div>
+
 <h2>Questions and Answers</h2>
 <ul id="qaList"><li class="muted" id="qaEmpty">Nothing yet.</li></ul>
 
@@ -128,6 +137,9 @@ const reactionCounts = document.getElementById("reactionCounts");
 const msgInput = document.getElementById("msgInput");
 const sendBtn = document.getElementById("sendBtn");
 const qaList = document.getElementById("qaList");
+const streamSection = document.getElementById("streamSection");
+const streamHolder = document.getElementById("streamHolder");
+let currentEmbed = null;
 
 let map = null, marker = null, trail = null;
 const trailPoints = [];
@@ -363,7 +375,43 @@ function applyState(s) {
     (s.like_count || 0) + " like" + (s.like_count === 1 ? "" : "s") + ", " +
     (s.dislike_count || 0) + " dislike" + (s.dislike_count === 1 ? "" : "s");
 
+  applyStreamEmbed(s.stream_embed || null);
   maybePlayIntro(s);
+}
+
+// Only rebuilt when the value actually changes — reassigning an iframe src on every poll
+// would restart the video every few seconds.
+function applyStreamEmbed(embed) {
+  if (embed === currentEmbed) return;
+  currentEmbed = embed;
+
+  streamHolder.innerHTML = "";
+  if (!embed) { streamSection.hidden = true; return; }
+
+  let src = null;
+  if (embed.indexOf("channel:") === 0) {
+    // Whatever is live on that channel right now — works no matter which tool started the
+    // stream (Restream, OBS, YouTube Studio), which is the whole reason for this form.
+    src = "https://www.youtube-nocookie.com/embed/live_stream?channel=" +
+          encodeURIComponent(embed.slice(8));
+  } else if (embed.indexOf("video:") === 0) {
+    src = "https://www.youtube-nocookie.com/embed/" + encodeURIComponent(embed.slice(6));
+  }
+  if (!src) { streamSection.hidden = true; return; }
+
+  const f = document.createElement("iframe");
+  f.src = src;
+  f.title = "Live stream from the pilot";       // named for screen readers, not left as "iframe"
+  f.width = "100%";
+  f.height = "420";
+  f.style.maxWidth = "900px";
+  f.style.border = "1px solid #888";
+  f.allow = "accelerometer; encrypted-media; picture-in-picture";
+  f.allowFullscreen = true;
+  // nocookie plus no autoplay: viewers choose to start it, so it can never talk over the
+  // pilot's own spoken update or the intro clip.
+  streamHolder.appendChild(f);
+  streamSection.hidden = false;
 }
 
 async function refreshRoom() {
